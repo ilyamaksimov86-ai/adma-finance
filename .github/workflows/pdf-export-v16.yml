@@ -1,0 +1,30 @@
+name: PDF export v16
+
+on:
+  push:
+    paths:
+      - '.github/workflows/pdf-export-v16.yml'
+      - '.github/scripts/patch_v16.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch PDF export
+        run: python .github/scripts/patch_v16.py
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud.js index.html
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Add reimbursement PDF export v16"
+            git push
+          fi
