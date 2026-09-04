@@ -224,12 +224,22 @@
     if (!ticket || Date.now() - ticket.createdAt > 90 * 60 * 1000) ticket = await primeReceiptUpload(false);
     if (!ticket?.path || !ticket?.token) throw new Error('receipt_ticket_unavailable');
     banner('Загружаю чек в хранилище…');
-    const client = await getStorageClient();
-    const { error } = await client.storage.from('receipts').uploadToSignedUrl(ticket.path, ticket.token, blob, {
-      contentType: 'image/jpeg',
-      cacheControl: '3600',
-    });
-    if (error) throw new Error(error.message || 'receipt_upload_failed');
+    const uploadPath = ticket.path.split('/').map(encodeURIComponent).join('/');
+    const uploadUrl = SUPABASE_URL + '/storage/v1/object/upload/sign/receipts/' + uploadPath + '?token=' + encodeURIComponent(ticket.token);
+    const form = new FormData();
+    form.append('cacheControl', '3600');
+    form.append('', blob, 'receipt.jpg');
+    let uploadRes;
+    try {
+      uploadRes = await fetch(uploadUrl, { method: 'PUT', body: form });
+    } catch (e) {
+      throw new Error('storage_network_' + ((e && e.message) || 'failed'));
+    }
+    if (!uploadRes.ok) {
+      let msg = '';
+      try { msg = await uploadRes.text(); } catch {}
+      throw new Error('storage_HTTP_' + uploadRes.status + (msg ? ': ' + msg.slice(0, 180) : ''));
+    }
     payload.receipt_path = ticket.path;
     receiptUploadTicket = null;
     return payload;
