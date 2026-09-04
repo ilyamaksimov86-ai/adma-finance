@@ -1,0 +1,63 @@
+name: Hotfix receipt upload v9
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hotfix-storage-v9.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch cloud uploader
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('cloud.js')
+          s = p.read_text()
+          old = """    const client = await getStorageClient();
+    const { error } = await client.storage.from('receipts').uploadToSignedUrl(ticket.path, ticket.token, blob, {
+      contentType: 'image/jpeg',
+      cacheControl: '3600',
+    });
+    if (error) throw new Error(error.message || 'receipt_upload_failed');
+"""
+          new = """    const uploadPath = ticket.path.split('/').map(encodeURIComponent).join('/');
+    const uploadUrl = `${SUPABASE_URL}/storage/v1/object/upload/sign/receipts/${uploadPath}?token=${encodeURIComponent(ticket.token)}`;
+    const form = new FormData();
+    form.append('cacheControl', '3600');
+    form.append('', blob, 'receipt.jpg');
+    let uploadRes;
+    try {
+      uploadRes = await fetch(uploadUrl, { method: 'PUT', body: form });
+    } catch (e) {
+      throw new Error('storage_network_' + (e?.message || 'failed'));
+    }
+    if (!uploadRes.ok) {
+      let msg = '';
+      try { msg = await uploadRes.text(); } catch {}
+      throw new Error(`storage_HTTP_${uploadRes.status}${msg ? ': ' + msg.slice(0, 180) : ''}`);
+    }
+"""
+          if old not in s:
+              raise SystemExit('target uploader block not found')
+          p.write_text(s.replace(old, new, 1))
+
+          i = Path('index.html')
+          h = i.read_text()
+          import re
+          h2, n = re.subn(r'cloud\.js\?v=\d+', 'cloud.js?v=9', h, count=1)
+          if n != 1:
+              raise SystemExit('cloud.js version reference not found')
+          i.write_text(h2)
+          PY
+      - name: Remove one-time workflow and commit
+        run: |
+          rm .github/workflows/hotfix-storage-v9.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Use direct signed Storage upload v9"
+          git push
