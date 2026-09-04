@@ -1,0 +1,51 @@
+name: Finalize receipt upload v7
+on:
+  push:
+    branches: [receipt-v7-fix]
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: receipt-v7-fix
+      - name: Wait for legacy patch jobs
+        run: sleep 45
+      - name: Reset to latest branch
+        run: |
+          git fetch origin receipt-v7-fix
+          git reset --hard origin/receipt-v7-fix
+      - name: Apply definitive receipt fix
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('cloud.js')
+          s = p.read_text()
+          old = "    const signed = await api('sign_receipt', { ext: 'jpg' });"
+          new = """    const signedRes = await fetch(`${SUPABASE_FUNCTIONS}/adma-api`, {
+      method: 'POST',
+      body: JSON.stringify({ initData, action: 'sign_receipt', ext: 'jpg' }),
+    });
+    let signed = {};
+    try { signed = await signedRes.json(); } catch {}
+    if (!signedRes.ok) throw new Error(signed.error || `sign_receipt_HTTP_${signedRes.status}`);"""
+          if old not in s:
+              raise SystemExit('target sign_receipt line not found')
+          p.write_text(s.replace(old, new, 1))
+          q = Path('index.html')
+          h = q.read_text()
+          import re
+          h2, n = re.subn(r'cloud\.js\?v=\d+', 'cloud.js?v=7', h, count=1)
+          if n != 1:
+              raise SystemExit('cloud.js cache reference not found')
+          q.write_text(h2)
+          PY
+          rm -f .github/workflows/*.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Finalize receipt upload v7 and remove legacy patch workflows"
+          git push origin HEAD:receipt-v7-fix
