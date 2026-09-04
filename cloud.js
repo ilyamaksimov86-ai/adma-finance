@@ -1,17 +1,23 @@
 (() => {
   const SUPABASE_URL = 'https://blaacuwwvyatfiyjnsrw.supabase.co';
   const SUPABASE_FUNCTIONS = `${SUPABASE_URL}/functions/v1`;
-  const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_46rvPfMxc87CTWn6lXQ0Gg_VzBcPIpS';
   const tgApp = window.Telegram?.WebApp;
   const initData = tgApp?.initData || '';
   let cloudReady = false;
   let currentUser = null;
-  let storageClient = null;
-  let receiptUploadTicket = null;
   let selectedReceiptBlob = null;
   let selectedReceiptPreviewUrl = null;
+  let receiptPreparation = null;
+  let receiptGeneration = 0;
+  let uploadedReceiptPath = null;
+  let receiptError = null;
+  let savingExpense = false;
 
   function clearSelectedReceipt() {
+    receiptGeneration++;
+    receiptPreparation = null;
+    uploadedReceiptPath = null;
+    receiptError = null;
     selectedReceiptBlob = null;
     if (selectedReceiptPreviewUrl && selectedReceiptPreviewUrl.startsWith('blob:')) {
       try { URL.revokeObjectURL(selectedReceiptPreviewUrl); } catch {}
@@ -71,66 +77,29 @@
     if (kind === 'ok') setTimeout(() => el.remove(), 2200);
   }
 
-  async function post(path, body) {
-    const res = await fetch(`${SUPABASE_FUNCTIONS}/${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+  function post(path, body) {
+    // The Edge Functions parse JSON via req.json(), regardless of Content-Type.
+    // A safelisted text body avoids a second preflight after the photo upload.
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${SUPABASE_FUNCTIONS}/${path}`, true);
+      xhr.timeout = 45000;
+      xhr.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
+      xhr.onload = () => {
+        let data;
+        try { data = JSON.parse(xhr.responseText); }
+        catch { return reject(new Error('Некорректный ответ сервера')); }
+        if (xhr.status >= 200 && xhr.status < 300 && data.ok !== false && !data.error) return resolve(data);
+        reject(new Error(data.error || `HTTP_${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('Ошибка соединения с облаком. Данные формы сохранены.'));
+      xhr.ontimeout = () => reject(new Error('Сервер не ответил вовремя. Проверьте список расходов перед повторным сохранением.'));
+      xhr.send(JSON.stringify(body));
     });
-    let data = {};
-    try { data = await res.json(); } catch {}
-    if (!res.ok) {
-      const err = new Error(data.error || `HTTP_${res.status}`);
-      err.status = res.status;
-      throw err;
-    }
-    return data;
   }
 
   async function api(action, extra = {}) {
     return post('adma-api', { initData, action, ...extra });
-  }
-
-  async function primeReceiptUpload(silent = true) {
-    try {
-      const ticket = await api('sign_receipt', { ext: 'jpg' });
-      if (ticket?.path && ticket?.token) {
-        receiptUploadTicket = { path: ticket.path, token: ticket.token, createdAt: Date.now() };
-        return receiptUploadTicket;
-      }
-      throw new Error('receipt_ticket_invalid');
-    } catch (e) {
-      console.warn('Receipt upload ticket preload failed', e);
-      if (!silent) throw e;
-      return null;
-    }
-  }
-
-  function loadSupabaseSdk() {
-    if (window.supabase?.createClient) return Promise.resolve(window.supabase);
-    return new Promise((resolve, reject) => {
-      const existing = document.getElementById('supabaseSdk');
-      if (existing) {
-        existing.addEventListener('load', () => resolve(window.supabase), { once: true });
-        existing.addEventListener('error', () => reject(new Error('supabase_sdk_failed')), { once: true });
-        return;
-      }
-      const s = document.createElement('script');
-      s.id = 'supabaseSdk';
-      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
-      s.onload = () => resolve(window.supabase);
-      s.onerror = () => reject(new Error('supabase_sdk_failed'));
-      document.head.appendChild(s);
-    });
-  }
-
-  async function getStorageClient() {
-    if (storageClient) return storageClient;
-    const sdk = await loadSupabaseSdk();
-    storageClient = sdk.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    });
-    return storageClient;
   }
 
   function mapProject(p) {
@@ -215,36 +184,6 @@
     return true;
   }
 
-  function compressReceipt(dataUrl) {
-    return new Promise(resolve => {
-      if (!dataUrl || !dataUrl.startsWith('data:image/')) return resolve(dataUrl);
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const max = 1000;
-          const scale = Math.min(1, max / Math.max(img.width, img.height));
-          const w = Math.max(1, Math.round(img.width * scale));
-          const h = Math.max(1, Math.round(img.height * scale));
-          const canvas = document.createElement('canvas');
-          canvas.width = w; canvas.height = h;
-          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg', 0.58));
-        } catch { resolve(dataUrl); }
-      };
-      img.onerror = () => resolve(dataUrl);
-      img.src = dataUrl;
-    });
-  }
-
-  function dataUrlToBlob(dataUrl) {
-    const [meta, base64] = dataUrl.split(',');
-    const mime = (meta.match(/^data:([^;]+);base64$/) || [])[1] || 'image/jpeg';
-    const bin = atob(base64 || '');
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new Blob([bytes], { type: mime });
-  }
-
   function expensePayload() {
     const previous = editingExpenseId ? state.expenses.find(x => x.id === editingExpenseId) : null;
     return {
@@ -297,6 +236,9 @@
   }
 
   async function attachNewReceipt(payload) {
+    if (receiptPreparation) await receiptPreparation;
+    if (receiptError) throw receiptError;
+    if (uploadedReceiptPath) return { ...payload, receipt_path: uploadedReceiptPath };
     if (!selectedReceiptBlob) return payload;
     banner('Загружаю чек в облако…');
     let data;
@@ -316,6 +258,7 @@
       }
     }
     if (!data?.path) throw new Error('Сервер не вернул путь к чеку');
+    uploadedReceiptPath = data.path;
     payload.receipt_path = data.path;
     return payload;
   }
@@ -655,7 +598,7 @@
     $('#app').innerHTML = `<div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
       <div class="card"><small class="muted">Ваш доступ</small><strong style="display:block;margin-top:6px">${roleLabel(role)}</strong>${name ? `<div class="muted" style="margin-top:4px">${esc(name)}</div>` : ''}</div>
       ${role === 'owner' ? '<div class="card"><strong>Команда</strong><p class="muted">Новые сотрудники сначала открывают Mini App через @Admafinance_bot. После этого они появятся здесь и будут ждать подтверждения.</p><button id="teamAccess" class="btn primary" style="width:100%">Команда и доступ</button></div>' : ''}
-      <div class="card"><strong>ADMA Finance</strong><p class="muted">Финансы объектов · облачная версия · v16</p></div>`;
+      <div class="card"><strong>ADMA Finance</strong><p class="muted">Финансы объектов · облачная версия · v17</p></div>`;
     const teamBtn = document.getElementById('teamAccess');
     if (teamBtn) teamBtn.onclick = openTeamAccess;
   }
@@ -668,6 +611,7 @@
     renderDue = renderDueCloud;
     const originalOpenExpense = openExpense;
     openExpense = function(pid) {
+      if (savingExpense) return;
       clearSelectedReceipt();
       const active = activeProjects();
       const requested = pid ? state.projects.find(p => p.id === pid) : null;
@@ -679,6 +623,7 @@
 
     const originalEditExpense = editExpense;
     editExpense = function(i) {
+      if (savingExpense) return;
       clearSelectedReceipt();
       return originalEditExpense(i);
     };
@@ -687,15 +632,21 @@
       const file = eReceipt.files?.[0];
       if (!file) return;
       clearSelectedReceipt();
+      const generation = receiptGeneration;
       try {
         banner('Подготавливаю фото чека…');
-        selectedReceiptBlob = await prepareReceiptFile(file);
+        receiptPreparation = prepareReceiptFile(file);
+        const prepared = await receiptPreparation;
+        if (generation !== receiptGeneration) return;
+        selectedReceiptBlob = prepared;
         selectedReceiptPreviewUrl = URL.createObjectURL(selectedReceiptBlob);
         state.receipt = null;
         preview.src = selectedReceiptPreviewUrl;
         preview.style.display = 'block';
         banner('Чек готов к загрузке', 'ok');
       } catch (e) {
+        if (generation !== receiptGeneration) return;
+        receiptError = e;
         eReceipt.value = '';
         preview.style.display = 'none';
         banner(e?.message || 'Не удалось подготовить фото', 'error');
@@ -722,21 +673,32 @@
 
     expenseForm.onsubmit = async ev => {
       ev.preventDefault();
-      if (!cloudReady) return;
+      if (!cloudReady || savingExpense) return;
+      savingExpense = true;
+      const controls = [...expenseForm.querySelectorAll('input,select,textarea,button')];
+      const disabled = controls.map(el => el.disabled);
+      controls.forEach(el => el.disabled = true);
+      const expenseId = editingExpenseId;
       try {
         let payload = expensePayload();
         payload = await attachNewReceipt(payload);
         banner(editingExpenseId ? 'Сохраняю изменения…' : 'Сохраняю расход…');
-        if (editingExpenseId) await api('update_expense', { expense: payload });
+        if (expenseId) await api('update_expense', { expense: payload });
         else await api('create_expense', { expense: payload });
         editingExpenseId = null;
         state.receipt = null;
         clearSelectedReceipt();
         expenseDlg.close();
-        await loadCloud();
+        try { await loadCloud(); }
+        catch { banner('Расход сохранён, но список не обновился. Перезапустите приложение.', 'error'); return; }
         banner(payload.receipt_path ? 'Сохранено в облаке вместе с чеком' : 'Сохранено в облаке', 'ok');
       } catch (e) { console.error(e); banner('Не удалось сохранить расход: ' + e.message, 'error'); }
+      finally {
+        savingExpense = false;
+        controls.forEach((el, i) => el.disabled = disabled[i]);
+      }
     };
+    expenseDlg.addEventListener('cancel', ev => { if (savingExpense) ev.preventDefault(); });
 
     const originalDetails = details;
     details = function(i) {

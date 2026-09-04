@@ -1,0 +1,1 @@
+{"name":"adma-finance","private":true,"version":"0.17.0","scripts":{"check":"node --check app.js && node --check cloud.js && node --check tests/smoke.cjs","test":"node tests/smoke.cjs"},"devDependencies":{"playwright":"1.62.1"}}
