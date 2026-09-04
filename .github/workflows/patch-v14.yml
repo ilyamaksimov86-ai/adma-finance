@@ -1,0 +1,21 @@
+name: Patch v14
+on:
+  push:
+    paths:
+      - '.github/scripts/patch_v14.py'
+      - '.github/workflows/patch-v14.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 .github/scripts/patch_v14.py
+      - run: rm .github/workflows/patch-v14.yml
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add cloud.js index.html .github/workflows/patch-v14.yml
+          git commit -m "Fix team dialog refresh and bump v14" || exit 0
+          git push
