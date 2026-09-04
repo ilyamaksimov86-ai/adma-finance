@@ -200,13 +200,11 @@
 
   async function attachNewReceipt(payload) {
     if (typeof state.receipt !== 'string' || !state.receipt.startsWith('data:image/')) return payload;
-    banner('Загружаю чек напрямую в хранилище…');
+    banner('Готовлю чек к загрузке…');
     const compact = await compressReceipt(state.receipt);
     const blob = dataUrlToBlob(compact);
-    const signedRes = await fetch(\, { method: 'POST', body: JSON.stringify({ initData, ext: 'jpg' }) });
-    let signed = {};
-    try { signed = await signedRes.json(); } catch {}
-    if (!signedRes.ok) throw new Error(signed.error || \);
+    const signed = await api('sign_receipt', { ext: 'jpg' });
+    banner('Загружаю чек в хранилище…');
     const client = await getStorageClient();
     const { error } = await client.storage.from('receipts').uploadToSignedUrl(signed.path, signed.token, blob, {
       contentType: 'image/jpeg',
