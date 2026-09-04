@@ -7,6 +7,7 @@
   let cloudReady = false;
   let currentUser = null;
   let storageClient = null;
+  let receiptUploadTicket = null;
 
   function banner(text, kind = 'info') {
     let el = document.getElementById('cloudBanner');
@@ -40,6 +41,21 @@
 
   async function api(action, extra = {}) {
     return post('adma-api', { initData, action, ...extra });
+  }
+
+  async function primeReceiptUpload(silent = true) {
+    try {
+      const ticket = await api('sign_receipt', { ext: 'jpg' });
+      if (ticket?.path && ticket?.token) {
+        receiptUploadTicket = { path: ticket.path, token: ticket.token, createdAt: Date.now() };
+        return receiptUploadTicket;
+      }
+      throw new Error('receipt_ticket_invalid');
+    } catch (e) {
+      console.warn('Receipt upload ticket preload failed', e);
+      if (!silent) throw e;
+      return null;
+    }
   }
 
   function loadSupabaseSdk() {
@@ -117,6 +133,7 @@
     state.expenses = (data.expenses || []).map(mapExpense);
     save();
     render();
+    if (cloudReady && !receiptUploadTicket) void primeReceiptUpload(true);
     return data;
   }
 
@@ -203,21 +220,18 @@
     banner('Готовлю чек к загрузке…');
     const compact = await compressReceipt(state.receipt);
     const blob = dataUrlToBlob(compact);
-    const signedRes = await fetch(`${SUPABASE_FUNCTIONS}/adma-api`, {
-      method: 'POST',
-      body: JSON.stringify({ initData, action: 'sign_receipt', ext: 'jpg' }),
-    });
-    let signed = {};
-    try { signed = await signedRes.json(); } catch {}
-    if (!signedRes.ok) throw new Error(signed.error || `sign_receipt_HTTP_${signedRes.status}`);
+    let ticket = receiptUploadTicket;
+    if (!ticket || Date.now() - ticket.createdAt > 90 * 60 * 1000) ticket = await primeReceiptUpload(false);
+    if (!ticket?.path || !ticket?.token) throw new Error('receipt_ticket_unavailable');
     banner('Загружаю чек в хранилище…');
     const client = await getStorageClient();
-    const { error } = await client.storage.from('receipts').uploadToSignedUrl(signed.path, signed.token, blob, {
+    const { error } = await client.storage.from('receipts').uploadToSignedUrl(ticket.path, ticket.token, blob, {
       contentType: 'image/jpeg',
       cacheControl: '3600',
     });
     if (error) throw new Error(error.message || 'receipt_upload_failed');
-    payload.receipt_path = signed.path;
+    payload.receipt_path = ticket.path;
+    receiptUploadTicket = null;
     return payload;
   }
 
@@ -303,6 +317,7 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       save();
+      await primeReceiptUpload(true);
       cloudReady = true;
       installCloudHandlers();
       render();
