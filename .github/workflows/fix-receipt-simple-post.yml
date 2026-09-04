@@ -1,9 +1,5 @@
-name: Fix receipt upload request
-on:
-  push:
-    paths:
-      - '.github/workflows/fix-receipt-simple-post.yml'
-  workflow_dispatch:
+name: Fix receipt simple post
+on: [push]
 permissions:
   contents: write
 jobs:
@@ -11,36 +7,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch cloud upload request
+      - name: Patch files
+        shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('cloud.js')
-          s=p.read_text()
-          old="""    const signed = await post('receipt-upload', { initData, ext: 'jpg' });"""
-          new="""    const signedRes = await fetch(`${SUPABASE_FUNCTIONS}/receipt-upload`, {
-      method: 'POST',
-      body: JSON.stringify({ initData, ext: 'jpg' }),
-    });
-    let signed = {};
-    try { signed = await signedRes.json(); } catch {}
-    if (!signedRes.ok) throw new Error(signed.error || `receipt_sign_HTTP_${signedRes.status}`);"""
-          if old not in s:
-              raise SystemExit('target receipt-upload call not found')
-          p.write_text(s.replace(old,new,1))
-
-          i=Path('index.html')
-          x=i.read_text()
-          import re
-          x,n=re.subn(r'cloud\.js\?v=\d+', 'cloud.js?v=5', x, count=1)
-          if not n:
-              raise SystemExit('cloud cache reference not found')
-          i.write_text(x)
-          PY
-      - name: Commit
-        run: |
+          python3 -c "from pathlib import Path; p=Path('cloud.js'); s=p.read_text(); old=\"    const signed = await post('receipt-upload', { initData, ext: 'jpg' });\"; new=\"    const signedRes = await fetch(\\`\\${SUPABASE_FUNCTIONS}/receipt-upload\\`, { method: 'POST', body: JSON.stringify({ initData, ext: 'jpg' }) });\\n    let signed = {};\\n    try { signed = await signedRes.json(); } catch {}\\n    if (!signedRes.ok) throw new Error(signed.error || \\`receipt_sign_HTTP_\\${signedRes.status}\\`);\"; assert old in s; p.write_text(s.replace(old,new,1))"
+          sed -i -E 's/cloud\.js\?v=[0-9]+/cloud.js?v=5/' index.html
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add cloud.js index.html
-          git commit -m "Use simple POST for receipt upload token" || exit 0
+          git commit -m "Use simple POST for receipt token" || exit 0
           git push
