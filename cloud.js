@@ -203,7 +203,10 @@
     banner('Загружаю чек напрямую в хранилище…');
     const compact = await compressReceipt(state.receipt);
     const blob = dataUrlToBlob(compact);
-    const signed = await post('receipt-upload', { initData, ext: 'jpg' });
+    const signedRes = await fetch(\, { method: 'POST', body: JSON.stringify({ initData, ext: 'jpg' }) });
+    let signed = {};
+    try { signed = await signedRes.json(); } catch {}
+    if (!signedRes.ok) throw new Error(signed.error || \);
     const client = await getStorageClient();
     const { error } = await client.storage.from('receipts').uploadToSignedUrl(signed.path, signed.token, blob, {
       contentType: 'image/jpeg',
