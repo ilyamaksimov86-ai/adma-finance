@@ -1,9 +1,5 @@
-name: Receipt upload v10
-on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/receipt-upload-v10.yml'
+name: receipt-upload-v10
+on: [push]
 permissions:
   contents: write
 jobs:
@@ -11,56 +7,56 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Replace receipt upload flow
+      - name: Patch files
+        shell: bash
         run: |
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
           import re
-          p = Path('cloud.js')
+          p = Path("cloud.js")
           s = p.read_text()
-          new_fn = r'''  async function attachNewReceipt(payload) {
-    if (typeof state.receipt !== 'string' || !state.receipt.startsWith('data:image/')) return payload;
-    banner('Готовлю чек к загрузке…');
-    const compact = await compressReceipt(state.receipt);
-    const blob = dataUrlToBlob(compact);
-    const form = new FormData();
-    form.append('initData', initData);
-    form.append('file', blob, 'receipt.jpg');
-    banner('Загружаю чек в облако…');
-    let res;
-    try {
-      res = await fetch(`${SUPABASE_FUNCTIONS}/receipt-upload`, { method: 'POST', body: form });
-    } catch (e) {
-      throw new Error('upload_network_' + ((e && e.message) || 'failed'));
-    }
-    let data = {};
-    try { data = await res.json(); } catch {}
-    if (!res.ok) throw new Error(data.error || `upload_HTTP_${res.status}`);
-    if (!data.path) throw new Error('upload_path_missing');
-    payload.receipt_path = data.path;
-    return payload;
-  }
+          start = s.index("  async function attachNewReceipt(payload) {")
+          end = s.index("  function installCloudHandlers", start)
+          replacement = """  async function attachNewReceipt(payload) {
+            if (typeof state.receipt !== 'string' || !state.receipt.startsWith('data:image/')) return payload;
+            banner('Готовлю чек к загрузке…');
+            const compact = await compressReceipt(state.receipt);
+            const blob = dataUrlToBlob(compact);
+            const form = new FormData();
+            form.append('initData', initData);
+            form.append('file', blob, 'receipt.jpg');
+            banner('Загружаю чек в облако…');
+            let res;
+            try {
+              res = await fetch(SUPABASE_FUNCTIONS + '/receipt-upload', { method: 'POST', body: form });
+            } catch (e) {
+              throw new Error('upload_network_' + ((e && e.message) || 'failed'));
+            }
+            let data = {};
+            try { data = await res.json(); } catch {}
+            if (!res.ok) throw new Error(data.error || ('upload_HTTP_' + res.status));
+            if (!data.path) throw new Error('upload_path_missing');
+            payload.receipt_path = data.path;
+            return payload;
+          }
 
-  function installCloudHandlers'''
-          s2, n = re.subn(r'  async function attachNewReceipt\(payload\) \{.*?\n  \}\n\n  function installCloudHandlers', new_fn, s, count=1, flags=re.S)
-          if n != 1:
-              raise SystemExit('attachNewReceipt block not found')
-          s2 = s2.replace("      await primeReceiptUpload(true);\n", "")
-          s2 = s2.replace("    if (cloudReady && !receiptUploadTicket) void primeReceiptUpload(true);\n", "")
-          p.write_text(s2)
+"""
+          replacement = "\n".join(line[10:] if line.startswith("          ") else line for line in replacement.splitlines()) + "\n"
+          s = s[:start] + replacement + s[end:]
+          s = s.replace("      await primeReceiptUpload(true);\n", "")
+          s = s.replace("    if (cloudReady && !receiptUploadTicket) void primeReceiptUpload(true);\n", "")
+          p.write_text(s)
 
-          i = Path('index.html')
+          i = Path("index.html")
           h = i.read_text()
-          h2, n = re.subn(r'cloud\.js\?v=\d+', 'cloud.js?v=10', h, count=1)
+          h, n = re.subn(r"cloud\.js\?v=\d+", "cloud.js?v=10", h, count=1)
           if n != 1:
-              raise SystemExit('cloud.js version reference not found')
-          i.write_text(h2)
+            raise SystemExit("cloud version not found")
+          i.write_text(h)
           PY
-      - name: Commit
-        run: |
           rm .github/workflows/receipt-upload-v10.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Rebuild receipt upload via multipart edge function"
+          git commit -m "Rebuild receipt upload through multipart edge function"
           git push
