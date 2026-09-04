@@ -8,6 +8,54 @@
   let currentUser = null;
   let storageClient = null;
   let receiptUploadTicket = null;
+  let selectedReceiptBlob = null;
+  let selectedReceiptPreviewUrl = null;
+
+  function clearSelectedReceipt() {
+    selectedReceiptBlob = null;
+    if (selectedReceiptPreviewUrl && selectedReceiptPreviewUrl.startsWith('blob:')) {
+      try { URL.revokeObjectURL(selectedReceiptPreviewUrl); } catch {}
+    }
+    selectedReceiptPreviewUrl = null;
+  }
+
+  function prepareReceiptFile(file) {
+    return new Promise((resolve, reject) => {
+      if (!file) return reject(new Error('Файл не выбран'));
+      const type = String(file.type || '').toLowerCase();
+      if (!type.startsWith('image/')) return reject(new Error('Нужна фотография чека'));
+
+      const sourceUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxSide = 1400;
+          const scale = Math.min(1, maxSide / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+          const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+          const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          canvas.toBlob(blob => {
+            URL.revokeObjectURL(sourceUrl);
+            if (!blob) return reject(new Error('Не удалось подготовить фото'));
+            resolve(new File([blob], 'receipt.jpg', { type: 'image/jpeg' }));
+          }, 'image/jpeg', 0.72);
+        } catch (e) {
+          URL.revokeObjectURL(sourceUrl);
+          reject(e);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(sourceUrl);
+        if (file.size <= 8 * 1024 * 1024) resolve(file);
+        else reject(new Error('Это фото не удалось сжать. Сделай скриншот чека и выбери его.'));
+      };
+      img.src = sourceUrl;
+    });
+  }
 
   function banner(text, kind = 'info') {
     let el = document.getElementById('cloudBanner');
@@ -215,29 +263,61 @@
   }
 
   async function attachNewReceipt(payload) {
-    if (typeof state.receipt !== 'string' || !state.receipt.startsWith('data:image/')) return payload;
-    banner('Готовлю чек к загрузке…');
-    const compact = await compressReceipt(state.receipt);
-    const blob = dataUrlToBlob(compact);
+    if (!selectedReceiptBlob) return payload;
     const form = new FormData();
     form.append('initData', initData);
-    form.append('file', blob, 'receipt.jpg');
+    form.append('file', selectedReceiptBlob, selectedReceiptBlob.name || 'receipt.jpg');
     banner('Загружаю чек в облако…');
     let res;
     try {
       res = await fetch(SUPABASE_FUNCTIONS + '/receipt-upload', { method: 'POST', body: form });
     } catch (e) {
-      throw new Error('upload_network_' + ((e && e.message) || 'failed'));
+      throw new Error('Не удалось отправить фото. Попробуй другой снимок или скриншот.');
     }
     let data = {};
     try { data = await res.json(); } catch {}
-    if (!res.ok) throw new Error(data.error || ('upload_HTTP_' + res.status));
-    if (!data.path) throw new Error('upload_path_missing');
+    if (!res.ok) {
+      const message = data.error === 'receipt_too_large' ? 'Фото слишком большое. Выбери скриншот или другое фото.'
+        : data.error === 'image_required' ? 'Этот формат изображения не поддерживается. Сделай скриншот чека.'
+        : (data.error || ('upload_HTTP_' + res.status));
+      throw new Error(message);
+    }
+    if (!data.path) throw new Error('Сервер не вернул путь к чеку');
     payload.receipt_path = data.path;
     return payload;
   }
 
   function installCloudHandlers() {
+    const originalOpenExpense = openExpense;
+    openExpense = function(pid) {
+      clearSelectedReceipt();
+      return originalOpenExpense(pid);
+    };
+
+    const originalEditExpense = editExpense;
+    editExpense = function(i) {
+      clearSelectedReceipt();
+      return originalEditExpense(i);
+    };
+
+    eReceipt.onchange = async () => {
+      const file = eReceipt.files?.[0];
+      if (!file) return;
+      clearSelectedReceipt();
+      try {
+        banner('Подготавливаю фото чека…');
+        selectedReceiptBlob = await prepareReceiptFile(file);
+        selectedReceiptPreviewUrl = URL.createObjectURL(selectedReceiptBlob);
+        state.receipt = null;
+        preview.src = selectedReceiptPreviewUrl;
+        preview.style.display = 'block';
+        banner('Чек готов к загрузке', 'ok');
+      } catch (e) {
+        eReceipt.value = '';
+        preview.style.display = 'none';
+        banner(e?.message || 'Не удалось подготовить фото', 'error');
+      }
+    };
     projectForm.onsubmit = async ev => {
       ev.preventDefault();
       if (!cloudReady) return;
@@ -264,6 +344,7 @@
         else await api('create_expense', { expense: payload });
         editingExpenseId = null;
         state.receipt = null;
+        clearSelectedReceipt();
         expenseDlg.close();
         await loadCloud();
         banner(payload.receipt_path ? 'Сохранено в облаке вместе с чеком' : 'Сохранено в облаке', 'ok');
@@ -277,6 +358,14 @@
       if (!ex) return;
       const paid = document.getElementById('markPaid');
       const delBtn = document.getElementById('del');
+      if (delBtn) {
+        delBtn.textContent = 'Удалить расход';
+        const actions = delBtn.parentElement;
+        if (actions) actions.style.flexWrap = 'wrap';
+        delBtn.style.flex = '1 0 100%';
+        delBtn.style.width = '100%';
+        delBtn.style.marginTop = '2px';
+      }
       if (paid) paid.onclick = async () => {
         try {
           banner('Отмечаю компенсацию…');
