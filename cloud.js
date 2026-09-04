@@ -341,7 +341,7 @@
     const dlg = ensureTeamDialog();
     const list = dlg.querySelector('#teamList');
     list.innerHTML = '<div class="empty">Загружаю команду…</div>';
-    dlg.showModal();
+    if (!dlg.open) dlg.showModal();
     try {
       const data = await api('list_users');
       const users = data.users || [];
