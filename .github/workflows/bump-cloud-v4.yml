@@ -1,0 +1,31 @@
+name: Bump cloud cache v4
+on:
+  push:
+    paths:
+      - '.github/workflows/bump-cloud-v4.yml'
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump cloud.js cache key
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text()
+          s2=re.sub(r'cloud\.js\?v=\d+', 'cloud.js?v=4', s)
+          if s2==s and 'cloud.js' in s:
+              s2=s.replace('src="cloud.js"','src="cloud.js?v=4"')
+          p.write_text(s2)
+          PY
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add index.html
+          git diff --cached --quiet || git commit -m 'Bump cloud cache to v4'
+          git push
