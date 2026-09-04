@@ -1,0 +1,27 @@
+name: One-time v8 cache bump
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump cloud cache and remove this workflow
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text()
+          if 'cloud.js?v=7' not in s:
+              raise SystemExit('v7 reference not found')
+          p.write_text(s.replace('cloud.js?v=7','cloud.js?v=8',1))
+          PY
+          rm -f .github/workflows/bump-v8.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Bump receipt uploader cache to v8"
+          git push
