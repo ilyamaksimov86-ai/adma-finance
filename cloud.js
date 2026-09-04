@@ -262,27 +262,60 @@
     };
   }
 
+  function uploadReceiptViaXHR(file) {
+    return new Promise((resolve, reject) => {
+      const form = new FormData();
+      form.append('initData', initData);
+      form.append('file', file, file.name || 'receipt.jpg');
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', SUPABASE_FUNCTIONS + '/receipt-upload', true);
+      xhr.timeout = 45000;
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch {}
+        if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+        const message = data.error === 'receipt_too_large' ? 'Фото слишком большое. Выбери скриншот или другое фото.'
+          : data.error === 'image_required' ? 'Этот формат изображения не поддерживается. Сделай скриншот чека.'
+          : (data.error || ('upload_HTTP_' + xhr.status));
+        const err = new Error(message);
+        err.retryable = false;
+        reject(err);
+      };
+      xhr.onerror = () => {
+        const err = new Error('Не удалось передать фото в облако. Повторяю загрузку…');
+        err.retryable = true;
+        reject(err);
+      };
+      xhr.ontimeout = () => {
+        const err = new Error('Загрузка чека заняла слишком много времени. Повторяю…');
+        err.retryable = true;
+        reject(err);
+      };
+      xhr.send(form);
+    });
+  }
+
   async function attachNewReceipt(payload) {
     if (!selectedReceiptBlob) return payload;
-    const form = new FormData();
-    form.append('initData', initData);
-    form.append('file', selectedReceiptBlob, selectedReceiptBlob.name || 'receipt.jpg');
     banner('Загружаю чек в облако…');
-    let res;
+    let data;
     try {
-      res = await fetch(SUPABASE_FUNCTIONS + '/receipt-upload', { method: 'POST', body: form });
-    } catch (e) {
-      throw new Error('Не удалось отправить фото. Попробуй другой снимок или скриншот.');
+      data = await uploadReceiptViaXHR(selectedReceiptBlob);
+    } catch (firstError) {
+      if (!firstError?.retryable) throw firstError;
+      await new Promise(resolve => setTimeout(resolve, 500));
+      banner('Повторяю загрузку чека…');
+      try {
+        data = await uploadReceiptViaXHR(selectedReceiptBlob);
+      } catch (secondError) {
+        if (secondError?.retryable) {
+          throw new Error('Не удалось передать именно это фото. Попробуй сделать скриншот чека и загрузить его.');
+        }
+        throw secondError;
+      }
     }
-    let data = {};
-    try { data = await res.json(); } catch {}
-    if (!res.ok) {
-      const message = data.error === 'receipt_too_large' ? 'Фото слишком большое. Выбери скриншот или другое фото.'
-        : data.error === 'image_required' ? 'Этот формат изображения не поддерживается. Сделай скриншот чека.'
-        : (data.error || ('upload_HTTP_' + res.status));
-      throw new Error(message);
-    }
-    if (!data.path) throw new Error('Сервер не вернул путь к чеку');
+    if (!data?.path) throw new Error('Сервер не вернул путь к чеку');
     payload.receipt_path = data.path;
     return payload;
   }
@@ -357,14 +390,30 @@
       const ex = state.expenses.find(x => x.id === i);
       if (!ex) return;
       const paid = document.getElementById('markPaid');
+      const editBtn = document.getElementById('editExpenseBtn');
       const delBtn = document.getElementById('del');
-      if (delBtn) {
+      const actions = delBtn?.parentElement || editBtn?.parentElement;
+      if (actions && delBtn) {
+        const topRow = document.createElement('div');
+        topRow.className = 'row';
+        topRow.style.width = '100%';
+        if (editBtn) {
+          editBtn.style.flex = '1 1 0';
+          editBtn.style.minWidth = '0';
+          topRow.appendChild(editBtn);
+        }
+        if (paid) {
+          paid.style.flex = '1 1 0';
+          paid.style.minWidth = '0';
+          topRow.appendChild(paid);
+        }
         delBtn.textContent = 'Удалить расход';
-        const actions = delBtn.parentElement;
-        if (actions) actions.style.flexWrap = 'wrap';
-        delBtn.style.flex = '1 0 100%';
         delBtn.style.width = '100%';
-        delBtn.style.marginTop = '2px';
+        delBtn.style.display = 'block';
+        delBtn.style.flex = 'none';
+        actions.className = '';
+        actions.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-top:12px;width:100%';
+        actions.replaceChildren(topRow, delBtn);
       }
       if (paid) paid.onclick = async () => {
         try {
