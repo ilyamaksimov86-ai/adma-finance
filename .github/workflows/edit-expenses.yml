@@ -1,0 +1,42 @@
+name: Add expense editing
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/edit-expenses.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch expense editing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text()
+          if 'let editingExpenseId=null;' not in s:
+              s=s.replace("function openExpense(pid){", "let editingExpenseId=null;function openExpense(pid){editingExpenseId=null;")
+          old_submit="expenseForm.onsubmit=e=>{e.preventDefault();state.expenses.push({id:id(),projectId:eProject.value,amount:+eAmount.value,date:eDate.value,category:eCategory.value,supplier:eSupplier.value.trim(),paidBy:ePaidBy.value,reimburse:ePaidBy.value==='adma'&&eReimburse.checked,reimbursed:false,comment:eComment.value.trim(),receipt:state.receipt});save();expenseDlg.close();render()};"
+          new_submit="expenseForm.onsubmit=e=>{e.preventDefault();const data={projectId:eProject.value,amount:+eAmount.value,date:eDate.value,category:eCategory.value,supplier:eSupplier.value.trim(),paidBy:ePaidBy.value,reimburse:ePaidBy.value==='adma'&&eReimburse.checked,comment:eComment.value.trim(),receipt:state.receipt};if(editingExpenseId){const ex=state.expenses.find(x=>x.id===editingExpenseId);if(ex){Object.assign(ex,data);if(!ex.reimburse)ex.reimbursed=false}}else{state.expenses.push({id:id(),...data,reimbursed:false})}editingExpenseId=null;save();expenseDlg.close();render()};"
+          if old_submit in s:
+              s=s.replace(old_submit,new_submit)
+          if 'function editExpense(i)' not in s:
+              marker="function details(i){"
+              fn="function editExpense(i){const e=state.expenses.find(x=>x.id===i);if(!e)return;editingExpenseId=i;expenseForm.reset();eProject.innerHTML=state.projects.map(p=>`<option value=\"${p.id}\">${esc(p.name)}</option>`).join('');eCategory.innerHTML=cats.map(c=>`<option>${c}</option>`).join('');eProject.value=e.projectId;eAmount.value=e.amount;eDate.value=e.date;eCategory.value=e.category;eSupplier.value=e.supplier||'';ePaidBy.value=e.paidBy;eReimburse.checked=!!e.reimburse;reimbRow.style.display=e.paidBy==='adma'?'flex':'none';eComment.value=e.comment||'';state.receipt=e.receipt||null;if(e.receipt){preview.src=e.receipt;preview.style.display='block'}else{preview.style.display='none'}detailDlg.close();expenseDlg.showModal()};"
+              s=s.replace(marker,fn+marker)
+          old_actions="<div class=\"row\" style=\"margin-top:12px\">${pending(e)?'<button id=\"markPaid\" class=\"btn primary grow\">Компенсировано</button>':''}<button id=\"del\" class=\"btn danger\">Удалить</button></div>`;closeDetail.onclick=()=>detailDlg.close();"
+          new_actions="<div class=\"row\" style=\"margin-top:12px\"><button id=\"editExpenseBtn\" class=\"btn secondary grow\">Редактировать</button>${pending(e)?'<button id=\"markPaid\" class=\"btn primary grow\">Компенсировано</button>':''}<button id=\"del\" class=\"btn danger\">Удалить</button></div>`;closeDetail.onclick=()=>detailDlg.close();editExpenseBtn.onclick=()=>editExpense(i);"
+          if old_actions in s:
+              s=s.replace(old_actions,new_actions)
+          p.write_text(s)
+          PY
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet || git commit -m "Add expense editing"
+          git push
