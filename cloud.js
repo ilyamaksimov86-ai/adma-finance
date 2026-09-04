@@ -203,7 +203,13 @@
     banner('Готовлю чек к загрузке…');
     const compact = await compressReceipt(state.receipt);
     const blob = dataUrlToBlob(compact);
-    const signed = await api('sign_receipt', { ext: 'jpg' });
+    const signedRes = await fetch(`${SUPABASE_FUNCTIONS}/adma-api`, {
+      method: 'POST',
+      body: JSON.stringify({ initData, action: 'sign_receipt', ext: 'jpg' }),
+    });
+    let signed = {};
+    try { signed = await signedRes.json(); } catch {}
+    if (!signedRes.ok) throw new Error(signed.error || `sign_receipt_HTTP_${signedRes.status}`);
     banner('Загружаю чек в хранилище…');
     const client = await getStorageClient();
     const { error } = await client.storage.from('receipts').uploadToSignedUrl(signed.path, signed.token, blob, {
