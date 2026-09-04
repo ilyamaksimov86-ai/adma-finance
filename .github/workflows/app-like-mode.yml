@@ -1,0 +1,34 @@
+name: App-like mode
+on:
+  push:
+    paths:
+      - '.github/workflows/app-like-mode.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make Telegram Mini App feel native
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text()
+          s=s.replace('width=device-width,initial-scale=1,viewport-fit=cover','width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover')
+          if 'touch-action:manipulation' not in s:
+              s=s.replace('*{box-sizing:border-box}', '*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{overscroll-behavior:none;touch-action:manipulation}body{-webkit-user-select:none;user-select:none}input,textarea,select{-webkit-user-select:text;user-select:text}')
+          marker='const tg=window.Telegram?.WebApp;if(tg){tg.ready();tg.expand()}'
+          repl="const tg=window.Telegram?.WebApp;if(tg){tg.ready();tg.expand();try{tg.disableVerticalSwipes?.()}catch{};try{tg.setHeaderColor?.('#f6f6f8')}catch{};try{tg.setBackgroundColor?.('#f6f6f8')}catch{}}document.addEventListener('gesturestart',e=>e.preventDefault(),{passive:false});document.addEventListener('gesturechange',e=>e.preventDefault(),{passive:false});document.addEventListener('gestureend',e=>e.preventDefault(),{passive:false});document.addEventListener('touchmove',e=>{if(e.touches&&e.touches.length>1)e.preventDefault()},{passive:false})"
+          s=s.replace(marker,repl)
+          p.write_text(s)
+          PY
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet || git commit -m "Make Mini App feel native on iPhone"
+          git push
