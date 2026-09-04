@@ -133,7 +133,6 @@
     state.expenses = (data.expenses || []).map(mapExpense);
     save();
     render();
-    if (cloudReady && !receiptUploadTicket) void primeReceiptUpload(true);
     return data;
   }
 
@@ -220,28 +219,21 @@
     banner('Готовлю чек к загрузке…');
     const compact = await compressReceipt(state.receipt);
     const blob = dataUrlToBlob(compact);
-    let ticket = receiptUploadTicket;
-    if (!ticket || Date.now() - ticket.createdAt > 90 * 60 * 1000) ticket = await primeReceiptUpload(false);
-    if (!ticket?.path || !ticket?.token) throw new Error('receipt_ticket_unavailable');
-    banner('Загружаю чек в хранилище…');
-    const uploadPath = ticket.path.split('/').map(encodeURIComponent).join('/');
-    const uploadUrl = SUPABASE_URL + '/storage/v1/object/upload/sign/receipts/' + uploadPath + '?token=' + encodeURIComponent(ticket.token);
     const form = new FormData();
-    form.append('cacheControl', '3600');
-    form.append('', blob, 'receipt.jpg');
-    let uploadRes;
+    form.append('initData', initData);
+    form.append('file', blob, 'receipt.jpg');
+    banner('Загружаю чек в облако…');
+    let res;
     try {
-      uploadRes = await fetch(uploadUrl, { method: 'PUT', body: form });
+      res = await fetch(SUPABASE_FUNCTIONS + '/receipt-upload', { method: 'POST', body: form });
     } catch (e) {
-      throw new Error('storage_network_' + ((e && e.message) || 'failed'));
+      throw new Error('upload_network_' + ((e && e.message) || 'failed'));
     }
-    if (!uploadRes.ok) {
-      let msg = '';
-      try { msg = await uploadRes.text(); } catch {}
-      throw new Error('storage_HTTP_' + uploadRes.status + (msg ? ': ' + msg.slice(0, 180) : ''));
-    }
-    payload.receipt_path = ticket.path;
-    receiptUploadTicket = null;
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok) throw new Error(data.error || ('upload_HTTP_' + res.status));
+    if (!data.path) throw new Error('upload_path_missing');
+    payload.receipt_path = data.path;
     return payload;
   }
 
@@ -327,7 +319,6 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       save();
-      await primeReceiptUpload(true);
       cloudReady = true;
       installCloudHandlers();
       render();
