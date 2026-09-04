@@ -5,8 +5,6 @@
   let cloudReady = false;
   let currentUser = null;
 
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-
   function banner(text, kind = 'info') {
     let el = document.getElementById('cloudBanner');
     if (!el) {
@@ -64,18 +62,14 @@
       reimburse: !!e.reimbursement_required,
       reimbursed: !!e.reimbursed,
       comment: e.comment || '',
-      receipt: null,
+      receipt: e.receipt_url || null,
       receiptPath: e.receipt_path || null,
     };
   }
 
   function rememberLocalBackup() {
-    if (!localStorage.getItem('adma.backup.projects')) {
-      localStorage.setItem('adma.backup.projects', localStorage.getItem('adma.projects') || '[]');
-    }
-    if (!localStorage.getItem('adma.backup.expenses')) {
-      localStorage.setItem('adma.backup.expenses', localStorage.getItem('adma.expenses') || '[]');
-    }
+    if (!localStorage.getItem('adma.backup.projects')) localStorage.setItem('adma.backup.projects', localStorage.getItem('adma.projects') || '[]');
+    if (!localStorage.getItem('adma.backup.expenses')) localStorage.setItem('adma.backup.expenses', localStorage.getItem('adma.expenses') || '[]');
   }
 
   function backupData() {
@@ -84,9 +78,7 @@
         projects: JSON.parse(localStorage.getItem('adma.backup.projects') || '[]'),
         expenses: JSON.parse(localStorage.getItem('adma.backup.expenses') || '[]'),
       };
-    } catch {
-      return { projects: [], expenses: [] };
-    }
+    } catch { return { projects: [], expenses: [] }; }
   }
 
   async function loadCloud() {
@@ -105,43 +97,57 @@
       localStorage.setItem('adma.cloud.migrated', '1');
       return false;
     }
-
     banner('Переношу текущие данные в облако…');
     const ids = new Map();
     for (const p of old.projects) {
-      const r = await api('create_project', {
-        project: {
-          name: p.name || 'Объект',
-          address: p.address || null,
-          client_name: p.client || null,
-          comment: p.comment || null,
-          status: p.status === 'archived' ? 'archived' : 'active',
-        },
-      });
+      const r = await api('create_project', { project: {
+        name: p.name || 'Объект', address: p.address || null, client_name: p.client || null,
+        comment: p.comment || null, status: p.status === 'archived' ? 'archived' : 'active',
+      }});
       ids.set(String(p.id), r.project.id);
     }
-
     for (const e of old.expenses) {
       const projectId = ids.get(String(e.projectId));
       if (!projectId) continue;
-      await api('create_expense', {
-        expense: {
-          project_id: projectId,
-          amount: Number(e.amount || 0),
-          expense_date: e.date,
-          category: e.category || 'Прочее',
-          supplier: e.supplier || null,
-          paid_by: e.paidBy === 'client' ? 'client' : 'adma',
-          reimbursement_required: e.paidBy !== 'client' && !!e.reimburse,
-          reimbursed: !!e.reimbursed,
-          comment: e.comment || null,
-          receipt_path: null,
-        },
-      });
+      let receiptPath = null;
+      if (typeof e.receipt === 'string' && e.receipt.startsWith('data:image/')) {
+        try {
+          const compact = await compressReceipt(e.receipt);
+          const up = await api('upload_receipt', { data_url: compact });
+          receiptPath = up.path;
+        } catch (err) { console.warn('Legacy receipt migration skipped', err); }
+      }
+      await api('create_expense', { expense: {
+        project_id: projectId, amount: Number(e.amount || 0), expense_date: e.date,
+        category: e.category || 'Прочее', supplier: e.supplier || null,
+        paid_by: e.paidBy === 'client' ? 'client' : 'adma',
+        reimbursement_required: e.paidBy !== 'client' && !!e.reimburse,
+        reimbursed: !!e.reimbursed, comment: e.comment || null, receipt_path: receiptPath,
+      }});
     }
-
     localStorage.setItem('adma.cloud.migrated', '1');
     return true;
+  }
+
+  function compressReceipt(dataUrl) {
+    return new Promise(resolve => {
+      if (!dataUrl || !dataUrl.startsWith('data:image/')) return resolve(dataUrl);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const max = 1800;
+          const scale = Math.min(1, max / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+        } catch { resolve(dataUrl); }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
   }
 
   function expensePayload() {
@@ -161,34 +167,37 @@
     };
   }
 
+  async function attachNewReceipt(payload) {
+    if (typeof state.receipt !== 'string' || !state.receipt.startsWith('data:image/')) return payload;
+    banner('Загружаю чек в облако…');
+    const compact = await compressReceipt(state.receipt);
+    const uploaded = await api('upload_receipt', { data_url: compact });
+    payload.receipt_path = uploaded.path;
+    return payload;
+  }
+
   function installCloudHandlers() {
     projectForm.onsubmit = async ev => {
       ev.preventDefault();
       if (!cloudReady) return;
       try {
         banner('Сохраняю объект…');
-        await api('create_project', {
-          project: {
-            name: pName.value.trim(),
-            address: pAddress.value.trim() || null,
-            client_name: pClient.value.trim() || null,
-            comment: pComment.value.trim() || null,
-          },
-        });
+        await api('create_project', { project: {
+          name: pName.value.trim(), address: pAddress.value.trim() || null,
+          client_name: pClient.value.trim() || null, comment: pComment.value.trim() || null,
+        }});
         projectDlg.close();
         await loadCloud();
         banner('Объект сохранён в облаке', 'ok');
-      } catch (e) {
-        console.error(e);
-        banner('Не удалось сохранить объект: ' + e.message, 'error');
-      }
+      } catch (e) { console.error(e); banner('Не удалось сохранить объект: ' + e.message, 'error'); }
     };
 
     expenseForm.onsubmit = async ev => {
       ev.preventDefault();
       if (!cloudReady) return;
       try {
-        const payload = expensePayload();
+        let payload = expensePayload();
+        payload = await attachNewReceipt(payload);
         banner(editingExpenseId ? 'Сохраняю изменения…' : 'Сохраняю расход…');
         if (editingExpenseId) await api('update_expense', { expense: payload });
         else await api('create_expense', { expense: payload });
@@ -196,11 +205,8 @@
         state.receipt = null;
         expenseDlg.close();
         await loadCloud();
-        banner('Сохранено в облаке', 'ok');
-      } catch (e) {
-        console.error(e);
-        banner('Не удалось сохранить расход: ' + e.message, 'error');
-      }
+        banner(payload.receipt_path ? 'Сохранено в облаке вместе с чеком' : 'Сохранено в облаке', 'ok');
+      } catch (e) { console.error(e); banner('Не удалось сохранить расход: ' + e.message, 'error'); }
     };
 
     const originalDetails = details;
@@ -226,7 +232,7 @@
           await api('delete_expense', { id: i });
           detailDlg.close();
           await loadCloud();
-          banner('Расход удалён', 'ok');
+          banner('Расход и его чек удалены', 'ok');
         } catch (e) { banner('Ошибка: ' + e.message, 'error'); }
       };
     };
@@ -237,7 +243,6 @@
       banner('Облачный режим работает при запуске через Telegram', 'error');
       return;
     }
-
     rememberLocalBackup();
     banner('Подключаю облако…');
     try {
@@ -247,11 +252,9 @@
         banner('Ваш доступ ожидает подтверждения владельцем', 'error');
         return;
       }
-
       let cloud = await api('load');
       const migrated = await migrateLocalIfNeeded(cloud);
       if (migrated) cloud = await api('load');
-
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       save();
@@ -261,11 +264,9 @@
       banner('Облако подключено · ' + (currentUser.role === 'owner' ? 'Владелец' : currentUser.role), 'ok');
     } catch (e) {
       console.error('ADMA cloud init failed', e);
-      const msg = e.message === 'server_not_configured'
-        ? 'В Supabase не найден TELEGRAM_BOT_TOKEN'
-        : e.message === 'bad_signature'
-          ? 'Telegram не подтвердил вход. Закройте Mini App и откройте снова.'
-          : 'Облако пока недоступно: ' + e.message;
+      const msg = e.message === 'server_not_configured' ? 'В Supabase не найден TELEGRAM_BOT_TOKEN'
+        : e.message === 'bad_signature' ? 'Telegram не подтвердил вход. Закройте Mini App и откройте снова.'
+        : 'Облако пока недоступно: ' + e.message;
       banner(msg, 'error');
     }
   }
