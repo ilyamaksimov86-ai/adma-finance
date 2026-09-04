@@ -1,9 +1,12 @@
 (() => {
-  const SUPABASE_FUNCTIONS = 'https://blaacuwwvyatfiyjnsrw.supabase.co/functions/v1';
+  const SUPABASE_URL = 'https://blaacuwwvyatfiyjnsrw.supabase.co';
+  const SUPABASE_FUNCTIONS = `${SUPABASE_URL}/functions/v1`;
+  const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_46rvPfMxc87CTWn6lXQ0Gg_VzBcPIpS';
   const tgApp = window.Telegram?.WebApp;
   const initData = tgApp?.initData || '';
   let cloudReady = false;
   let currentUser = null;
+  let storageClient = null;
 
   function banner(text, kind = 'info') {
     let el = document.getElementById('cloudBanner');
@@ -37,6 +40,33 @@
 
   async function api(action, extra = {}) {
     return post('adma-api', { initData, action, ...extra });
+  }
+
+  function loadSupabaseSdk() {
+    if (window.supabase?.createClient) return Promise.resolve(window.supabase);
+    return new Promise((resolve, reject) => {
+      const existing = document.getElementById('supabaseSdk');
+      if (existing) {
+        existing.addEventListener('load', () => resolve(window.supabase), { once: true });
+        existing.addEventListener('error', () => reject(new Error('supabase_sdk_failed')), { once: true });
+        return;
+      }
+      const s = document.createElement('script');
+      s.id = 'supabaseSdk';
+      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+      s.onload = () => resolve(window.supabase);
+      s.onerror = () => reject(new Error('supabase_sdk_failed'));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function getStorageClient() {
+    if (storageClient) return storageClient;
+    const sdk = await loadSupabaseSdk();
+    storageClient = sdk.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    return storageClient;
   }
 
   function mapProject(p) {
@@ -109,20 +139,12 @@
     for (const e of old.expenses) {
       const projectId = ids.get(String(e.projectId));
       if (!projectId) continue;
-      let receiptPath = null;
-      if (typeof e.receipt === 'string' && e.receipt.startsWith('data:image/')) {
-        try {
-          const compact = await compressReceipt(e.receipt);
-          const up = await api('upload_receipt', { data_url: compact });
-          receiptPath = up.path;
-        } catch (err) { console.warn('Legacy receipt migration skipped', err); }
-      }
       await api('create_expense', { expense: {
         project_id: projectId, amount: Number(e.amount || 0), expense_date: e.date,
         category: e.category || 'Прочее', supplier: e.supplier || null,
         paid_by: e.paidBy === 'client' ? 'client' : 'adma',
         reimbursement_required: e.paidBy !== 'client' && !!e.reimburse,
-        reimbursed: !!e.reimbursed, comment: e.comment || null, receipt_path: receiptPath,
+        reimbursed: !!e.reimbursed, comment: e.comment || null, receipt_path: null,
       }});
     }
     localStorage.setItem('adma.cloud.migrated', '1');
@@ -150,6 +172,15 @@
     });
   }
 
+  function dataUrlToBlob(dataUrl) {
+    const [meta, base64] = dataUrl.split(',');
+    const mime = (meta.match(/^data:([^;]+);base64$/) || [])[1] || 'image/jpeg';
+    const bin = atob(base64 || '');
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+
   function expensePayload() {
     const previous = editingExpenseId ? state.expenses.find(x => x.id === editingExpenseId) : null;
     return {
@@ -169,10 +200,17 @@
 
   async function attachNewReceipt(payload) {
     if (typeof state.receipt !== 'string' || !state.receipt.startsWith('data:image/')) return payload;
-    banner('Загружаю чек в облако…');
+    banner('Загружаю чек напрямую в хранилище…');
     const compact = await compressReceipt(state.receipt);
-    const uploaded = await api('upload_receipt', { data_url: compact });
-    payload.receipt_path = uploaded.path;
+    const blob = dataUrlToBlob(compact);
+    const signed = await post('receipt-upload', { initData, ext: 'jpg' });
+    const client = await getStorageClient();
+    const { error } = await client.storage.from('receipts').uploadToSignedUrl(signed.path, signed.token, blob, {
+      contentType: 'image/jpeg',
+      cacheControl: '3600',
+    });
+    if (error) throw new Error(error.message || 'receipt_upload_failed');
+    payload.receipt_path = signed.path;
     return payload;
   }
 
