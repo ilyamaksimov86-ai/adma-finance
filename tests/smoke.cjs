@@ -68,7 +68,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     const until = async fn => {for(let i=0;i<100;i++){if(await fn())return;await new Promise(r=>setTimeout(r,30));}throw Error('Timed out');};
     const submit = () => page.evaluate(()=>expenseForm.requestSubmit());
     const open = async () => {await page.evaluate(()=>openExpense('project-1'));await page.fill('#eAmount','100');};
-    const closed = () => until(()=>page.evaluate(()=>!expenseDlg.open));
+    const closed = () => until(()=>page.evaluate(()=>!expenseDlg.open && !eAmount.disabled));
     const photo = async () => {
       const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=1600;c.height=800;c.getContext('2d').fillRect(0,0,1600,800);return c.toDataURL().split(',')[1];});
       await page.setInputFiles('#eReceipt',{name:'check.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
