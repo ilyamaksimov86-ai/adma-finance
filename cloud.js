@@ -98,8 +98,9 @@
     });
   }
 
+  AdmaAuth.init(post, initData);
   async function api(action, extra = {}) {
-    return post('adma-api', { initData, action, ...extra });
+    return post('adma-api', { ...await AdmaAuth.credentials(), action, ...extra });
   }
 
   function mapProject(p) {
@@ -130,20 +131,6 @@
     };
   }
 
-  function rememberLocalBackup() {
-    if (!localStorage.getItem('adma.backup.projects')) localStorage.setItem('adma.backup.projects', localStorage.getItem('adma.projects') || '[]');
-    if (!localStorage.getItem('adma.backup.expenses')) localStorage.setItem('adma.backup.expenses', localStorage.getItem('adma.expenses') || '[]');
-  }
-
-  function backupData() {
-    try {
-      return {
-        projects: JSON.parse(localStorage.getItem('adma.backup.projects') || '[]'),
-        expenses: JSON.parse(localStorage.getItem('adma.backup.expenses') || '[]'),
-      };
-    } catch { return { projects: [], expenses: [] }; }
-  }
-
   async function loadCloud() {
     const data = await api('load');
     state.projects = (data.projects || []).map(mapProject);
@@ -151,37 +138,6 @@
     save();
     render();
     return data;
-  }
-
-  async function migrateLocalIfNeeded(cloud) {
-    if ((cloud.projects || []).length || localStorage.getItem('adma.cloud.migrated') === '1') return false;
-    const old = backupData();
-    if (!old.projects.length) {
-      localStorage.setItem('adma.cloud.migrated', '1');
-      return false;
-    }
-    banner('Переношу текущие данные в облако…');
-    const ids = new Map();
-    for (const p of old.projects) {
-      const r = await api('create_project', { project: {
-        name: p.name || 'Объект', address: p.address || null, client_name: p.client || null,
-        comment: p.comment || null, status: p.status === 'archived' ? 'archived' : 'active',
-      }});
-      ids.set(String(p.id), r.project.id);
-    }
-    for (const e of old.expenses) {
-      const projectId = ids.get(String(e.projectId));
-      if (!projectId) continue;
-      await api('create_expense', { expense: {
-        project_id: projectId, amount: Number(e.amount || 0), expense_date: e.date,
-        category: e.category || 'Прочее', supplier: e.supplier || null,
-        paid_by: e.paidBy === 'client' ? 'client' : 'adma',
-        reimbursement_required: e.paidBy !== 'client' && !!e.reimburse,
-        reimbursed: !!e.reimbursed, comment: e.comment || null, receipt_path: null,
-      }});
-    }
-    localStorage.setItem('adma.cloud.migrated', '1');
-    return true;
   }
 
   function expensePayload() {
@@ -201,10 +157,11 @@
     };
   }
 
-  function uploadReceiptViaXHR(file) {
+  async function uploadReceiptViaXHR(file) {
+    const credentials = await AdmaAuth.credentials();
     return new Promise((resolve, reject) => {
       const form = new FormData();
-      form.append('initData', initData);
+      for (const [key, value] of Object.entries(credentials)) form.append(key, value);
       form.append('file', file, file.name || 'receipt.jpg');
 
       const xhr = new XMLHttpRequest();
@@ -275,10 +232,11 @@
     });
   }
 
-  function requestReimbursementPdfViaXHR(expenseIds = null) {
+  async function requestReimbursementPdfViaXHR(expenseIds = null) {
+    const credentials = await AdmaAuth.credentials();
     return new Promise((resolve, reject) => {
       const form = new FormData();
-      form.append('initData', initData);
+      for (const [key, value] of Object.entries(credentials)) form.append(key, value);
       if (Array.isArray(expenseIds)) form.append('expense_ids', JSON.stringify(expenseIds));
       const xhr = new XMLHttpRequest();
       xhr.open('POST', SUPABASE_FUNCTIONS + '/reimbursement-pdf', true);
@@ -546,9 +504,9 @@
         list.innerHTML = '<div class="empty">Пользователей пока нет</div>';
         return;
       }
-      list.innerHTML = users.map(u => {
+      list.innerHTML = '<button id="createWebUser" class="btn primary" style="width:100%;margin-bottom:14px">+ Сотрудник без Telegram</button>' + users.map(u => {
         const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || 'Пользователь Telegram';
-        const username = u.telegram_username ? '@' + u.telegram_username : 'Telegram ID ' + u.telegram_user_id;
+        const username = u.web_login ? 'Логин: ' + u.web_login : u.telegram_username ? '@' + u.telegram_username : 'Telegram ID ' + u.telegram_user_id;
         const self = currentUser && u.id === currentUser.id;
         const projects = state.projects.filter(p => p.status !== 'archived').map(p => `<label class="switch" style="margin:7px 0"><span>${esc(p.name)}</span><input class="teamProject" type="checkbox" value="${p.id}" ${(u.project_ids || []).includes(p.id) ? 'checked' : ''}></label>`).join('');
         return `<div class="card teamUser" data-user="${u.id}">
@@ -559,12 +517,16 @@
             <option value="foreman" ${u.role === 'foreman' ? 'selected' : ''}>Прораб</option>
           </select></label>
           <label class="switch"><span>Доступ включён</span><input class="teamActive" type="checkbox" ${u.is_active ? 'checked' : ''} ${self ? 'disabled' : ''}></label>
+          ${!self ? '<button type="button" class="btn secondary teamCredentials">Логин и пароль</button>' : ''}
           <div class="teamProjects" style="display:${u.role === 'foreman' ? 'block' : 'none'}"><div class="muted" style="margin:12px 0 7px">Объекты, доступные прорабу</div>${projects || '<div class="muted">Сначала создайте объект</div>'}</div>
           ${self ? '<div class="muted" style="margin-top:12px">Свой доступ владельца нельзя отключить здесь.</div>' : '<button class="btn primary teamSave" style="width:100%;margin-top:12px">Сохранить доступ</button>'}
         </div>`;
       }).join('');
 
+      list.querySelector('#createWebUser').onclick = () => openWebCredentials(null);
       list.querySelectorAll('.teamUser').forEach(card => {
+        const credentialsBtn = card.querySelector('.teamCredentials');
+        if (credentialsBtn) credentialsBtn.onclick = () => openWebCredentials(users.find(u => u.id === card.dataset.user));
         const role = card.querySelector('.teamRole');
         const projects = card.querySelector('.teamProjects');
         if (role && !role.disabled) role.onchange = () => { projects.style.display = role.value === 'foreman' ? 'block' : 'none'; };
@@ -598,9 +560,13 @@
     $('#app').innerHTML = `<div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
       <div class="card"><small class="muted">Ваш доступ</small><strong style="display:block;margin-top:6px">${roleLabel(role)}</strong>${name ? `<div class="muted" style="margin-top:4px">${esc(name)}</div>` : ''}</div>
       ${role === 'owner' ? '<div class="card"><strong>Команда</strong><p class="muted">Новые сотрудники сначала открывают Mini App через @Admafinance_bot. После этого они появятся здесь и будут ждать подтверждения.</p><button id="teamAccess" class="btn primary" style="width:100%">Команда и доступ</button></div>' : ''}
-      <div class="card"><strong>ADMA Finance</strong><p class="muted">Финансы объектов · облачная версия · v17</p></div>`;
+      <div class="card"><strong>Вход в браузере</strong><p class="muted">${currentUser?.web_login ? 'Ваш логин: ' + esc(currentUser.web_login) : 'Настройте логин и пароль для входа без Telegram.'}</p><button id="webCredentials" class="btn secondary">${currentUser?.web_login ? 'Изменить пароль' : 'Настроить вход'}</button>${!initData ? '<button id="webLogout" class="btn danger" style="margin-left:8px">Выйти</button>' : ''}</div>
+      <div class="card"><strong>ADMA Finance</strong><p class="muted">Финансы объектов · облачная версия · v18</p></div>`;
     const teamBtn = document.getElementById('teamAccess');
     if (teamBtn) teamBtn.onclick = openTeamAccess;
+    document.getElementById('webCredentials').onclick = () => openWebCredentials(currentUser);
+    const logout = document.getElementById('webLogout');
+    if (logout) logout.onclick = async () => { logout.disabled = true; try { await AdmaAuth.logout(); } finally { location.reload(); } };
   }
 
   function installCloudHandlers() {
@@ -753,36 +719,101 @@
     };
   }
 
+  function authErrorMessage(e) {
+    const messages = {
+      invalid_credentials: 'Неверный логин или пароль',
+      invalid_session: 'Войдите снова — сессия завершилась',
+      session_required: 'Введите логин и пароль',
+      not_approved: 'Доступ отключён. Обратитесь к владельцу.',
+      not_registered: 'Для этого аккаунта ещё не настроен доступ',
+      invalid_login: 'Логин: 3–40 символов, латинские буквы, цифры, точка, дефис или подчёркивание',
+      weak_password: 'Пароль должен содержать от 10 до 128 символов',
+      login_taken: 'Этот логин уже занят',
+      current_password_invalid: 'Текущий пароль неверен',
+      account_create_failed: 'Не удалось настроить аккаунт. Повторите через «Команда и доступ».',
+      account_link_failed: 'Пароль обновлён, но логин не сохранён. Проверьте логин в команде.',
+      forbidden: 'Недостаточно прав',
+      auth_unavailable: 'Сервис входа временно недоступен. Попробуйте ещё раз.',
+    };
+    return messages[e.message] || 'Не удалось выполнить запрос. Попробуйте ещё раз.';
+  }
+
+  function renderLogin(message = '') {
+    document.body.dataset.locked = 'login';
+    cloudReady = false;
+    state.projects = []; state.expenses = [];
+    $('#app').innerHTML = `<section class="card login-card"><h2>Вход в ADMA Finance</h2><p class="muted">Объекты, расходы и чеки — в одном месте.</p><form id="loginForm"><label>Логин<input id="webLogin" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="40"></label><label>Пароль<input id="webPassword" type="password" autocomplete="current-password" required maxlength="128"></label><p id="loginError" role="alert">${esc(message)}</p><button class="btn primary" style="width:100%">Войти</button></form><p class="muted">Первый вход? Настройте логин и пароль в Telegram: «Ещё → Вход в браузере». Сотрудникам доступ выдаёт владелец.</p></section>`;
+    document.getElementById('loginForm').onsubmit = async ev => {
+      ev.preventDefault();
+      const form = ev.currentTarget, btn = form.querySelector('button');
+      if (btn.disabled) return;
+      btn.disabled = true;
+      document.getElementById('loginError').textContent = '';
+      try {
+        await AdmaAuth.login(document.getElementById('webLogin').value.trim(), document.getElementById('webPassword').value);
+        document.getElementById('webPassword').value = '';
+        await start();
+      } catch(e) { document.getElementById('loginError').textContent = authErrorMessage(e); }
+      finally { btn.disabled = false; }
+    };
+  }
+
+  function openWebCredentials(user) {
+    let dlg = document.getElementById('accountDlg');
+    if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'accountDlg'; document.body.appendChild(dlg); }
+    const isSelf = user?.id === currentUser.id;
+    dlg.innerHTML = `<form id="accountForm"><div class="sheethead"><button type="button" id="closeAccount">Отмена</button><h2>${user ? 'Логин и пароль' : 'Новый сотрудник'}</h2><button class="btn primary">Сохранить</button></div>${!user ? '<label>Имя<input id="accountName" required maxlength="100"></label><label>Роль<select id="accountRole"><option value="foreman">Прораб</option><option value="partner">Партнёр</option></select></label>' : ''}<label>Логин<input id="accountLogin" value="${esc(user?.web_login||'')}" required pattern="[A-Za-z0-9._-]{3,40}" maxlength="40" autocomplete="username" autocapitalize="none" spellcheck="false"></label>${isSelf && !initData ? '<label>Текущий пароль<input id="accountCurrentPassword" type="password" autocomplete="current-password" required></label>' : ''}<label>Новый пароль<input id="accountPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128"></label><label>Повторите пароль<input id="accountPasswordRepeat" type="password" autocomplete="new-password" required minlength="10" maxlength="128"></label><p class="muted">Пароль от 10 символов. Логин — латинские буквы и цифры, точка, дефис или подчёркивание.</p><p id="accountMessage" role="alert"></p></form>`;
+    dlg.querySelector('#closeAccount').onclick = () => dlg.close();
+    dlg.querySelector('#accountForm').onsubmit = async ev => {
+      ev.preventDefault();
+      const form = ev.currentTarget, controls = [...form.querySelectorAll('input,select,button')];
+      if (controls.some(el => el.disabled)) return;
+      const password = dlg.querySelector('#accountPassword').value;
+      const msg = dlg.querySelector('#accountMessage');
+      if (password !== dlg.querySelector('#accountPasswordRepeat').value) { msg.textContent = 'Пароли не совпадают'; return; }
+      const payload = {action:user ? 'set_credentials' : 'create_user',user_id:user?.id,login:dlg.querySelector('#accountLogin').value.trim(),password,currentPassword:dlg.querySelector('#accountCurrentPassword')?.value,name:dlg.querySelector('#accountName')?.value,role:dlg.querySelector('#accountRole')?.value};
+      controls.forEach(el => el.disabled = true);
+      try {
+        const data = await post('account-admin', { ...await AdmaAuth.credentials(), ...payload });
+        form.reset(); dlg.close();
+        if (isSelf) { currentUser.web_login = data.login; render(); }
+        else await openTeamAccess();
+        banner('Вход настроен. Логин: ' + data.login, 'ok');
+      } catch(e) { msg.textContent = authErrorMessage(e); }
+      finally { controls.forEach(el => el.disabled = false); }
+    };
+    dlg.showModal();
+  }
+
   async function start() {
-    if (!initData) {
-      banner('Облачный режим работает при запуске через Telegram', 'error');
-      return;
-    }
-    rememberLocalBackup();
+    if (!initData && !AdmaAuth.hasSession()) { renderLogin(); return; }
     banner('Подключаю облако…');
     try {
-      const auth = await post('telegram-auth', { initData });
-      currentUser = auth.user;
-      if (!currentUser?.is_active) {
-        banner('Ваш доступ ожидает подтверждения владельцем', 'error');
-        return;
+      if (initData) {
+        const auth = await post('telegram-auth', { initData });
+        if (!auth.user?.is_active) throw new Error('not_approved');
       }
-      let cloud = await api('load');
-      const migrated = await migrateLocalIfNeeded(cloud);
-      if (migrated) cloud = await api('load');
+      const cloud = await api('load');
+      currentUser = cloud.current_user;
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
+      state.project = null;
+      // Web accounts never auto-import another user's local cache.
       save();
       cloudReady = true;
       installCloudHandlers();
+      delete document.body.dataset.locked;
       render();
-      banner('Облако подключено · ' + (currentUser.role === 'owner' ? 'Владелец' : currentUser.role), 'ok');
+      banner('Облако подключено · ' + roleLabel(currentUser.role), 'ok');
     } catch (e) {
-      console.error('ADMA cloud init failed', e);
-      const msg = e.message === 'server_not_configured' ? 'В Supabase не найден TELEGRAM_BOT_TOKEN'
-        : e.message === 'bad_signature' ? 'Telegram не подтвердил вход. Закройте Mini App и откройте снова.'
-        : 'Облако пока недоступно: ' + e.message;
-      banner(msg, 'error');
+      if (!initData) {
+        if (['invalid_session','session_required','not_approved','not_registered'].includes(e.message)) AdmaAuth.forget();
+        renderLogin(authErrorMessage(e));
+      } else {
+        document.body.dataset.locked = 'login';
+        $('#app').innerHTML = '<div class="card">Не удалось подключиться. Закройте Mini App и откройте снова.</div>';
+        banner(authErrorMessage(e), 'error');
+      }
     }
   }
 
