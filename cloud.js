@@ -13,6 +13,13 @@
   let receiptError = null;
   let savingExpense = false;
   let projectSection = 'overview';
+  let projectFinanceSection = 'summary';
+  let globalFinanceSection = 'summary';
+  const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'more']);
+  const globalTabLabels = {
+    home: 'Главная', projects: 'Объекты', finance: 'Финансы',
+    leads: 'Заявки', designers: 'Дизайнеры', masters: 'Мастера', more: 'Ещё',
+  };
   const projectStatuses = {
     active: 'В работе', preparation: 'Подготовка', in_progress: 'В работе',
     paused: 'Приостановлен', handover: 'Сдача', warranty: 'Гарантия', archived: 'Архив',
@@ -20,6 +27,9 @@
   const projectSections = [
     ['overview', 'Обзор'], ['schedule', 'График'], ['finance', 'Финансы'],
     ['team', 'Команда'], ['documents', 'Документы'], ['tasks', 'Задачи'], ['photos', 'Фото'],
+  ];
+  const projectFinanceSections = [
+    ['summary', 'Сводка'], ['acts', 'Акты'], ['waybills', 'Накладные'], ['checks', 'Чеки / Разное'],
   ];
   const stageStatuses = {
     planned: 'Запланирован', in_progress: 'В работе', completed: 'Выполнен',
@@ -447,12 +457,69 @@
     return 'По плану';
   }
 
+  function pageHeader(kicker, title, description, action = '') {
+    return `<div class="page-kicker">${esc(kicker)}</div><div class="page-title-row"><div><h2>${esc(title)}</h2><p>${esc(description)}</p></div>${action}</div>`;
+  }
+
+  function sectionTabs(items, active, attribute) {
+    return `<nav class="section-tabs" aria-label="Разделы">${items.map(([id, label]) => `<button class="section-tab ${active === id ? 'active' : ''}" ${attribute}="${id}">${label}</button>`).join('')}</nav>`;
+  }
+
+  function moduleScreen(icon, title, description, relation = '') {
+    return `<section class="card module-screen"><span class="module-screen-icon">${icon}</span><h2>${esc(title)}</h2><p>${esc(description)}</p>${relation ? `<div class="module-relation">${esc(relation)}</div>` : ''}</section>`;
+  }
+
+  function navigateGlobal(tab) {
+    state.project = null;
+    state.tab = globalTabs.has(tab) ? tab : 'home';
+    render();
+  }
+
+  function navigateProject(projectId, section = 'overview', financeSection = null) {
+    state.project = projectId;
+    state.tab = 'projects';
+    projectSection = projectSections.some(([id]) => id === section) ? section : 'overview';
+    if (financeSection && projectFinanceSections.some(([id]) => id === financeSection)) projectFinanceSection = financeSection;
+    render();
+  }
+
+  function routeHash() {
+    if (state.project) {
+      const finance = projectSection === 'finance' ? `/${projectFinanceSection}` : '';
+      return `#/projects/${encodeURIComponent(state.project)}/${projectSection}${finance}`;
+    }
+    return `#/${globalTabs.has(state.tab) ? state.tab : 'home'}`;
+  }
+
+  function applyHashRoute() {
+    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    if (parts[0] === 'projects' && parts[1] && state.projects.some(project => project.id === parts[1])) {
+      state.project = parts[1];
+      state.tab = 'projects';
+      projectSection = projectSections.some(([id]) => id === parts[2]) ? parts[2] : 'overview';
+      if (projectSection === 'finance' && projectFinanceSections.some(([id]) => id === parts[3])) projectFinanceSection = parts[3];
+      return;
+    }
+    state.project = null;
+    state.tab = globalTabs.has(parts[0]) ? parts[0] : 'home';
+  }
+
+  function syncRouteHash() {
+    const hash = routeHash();
+    if (location.hash !== hash) history.replaceState(null, '', hash);
+  }
+
   function syncAppChrome() {
     const projects = activeProjects();
-    if (!state.project && state.tab === 'home') document.getElementById('title').textContent = 'Главная';
+    document.getElementById('title').textContent = state.project ? (proj(state.project)?.name || 'Объект') : (globalTabLabels[state.tab] || 'Главная');
     document.querySelectorAll('[data-side-tab]').forEach(button => {
-      button.classList.toggle('active', !state.project && button.dataset.sideTab === state.tab);
-      button.onclick = () => { state.project = null; state.tab = button.dataset.sideTab; render(); };
+      button.classList.toggle('active', state.project ? button.dataset.sideTab === 'projects' : button.dataset.sideTab === state.tab);
+      button.onclick = () => navigateGlobal(button.dataset.sideTab);
+    });
+    document.querySelectorAll('.tabs [data-tab]').forEach(button => {
+      const mobileTab = ['leads', 'designers', 'masters'].includes(state.tab) ? 'more' : state.tab;
+      button.classList.toggle('active', state.project ? button.dataset.tab === 'projects' : button.dataset.tab === mobileTab);
+      button.onclick = () => navigateGlobal(button.dataset.tab);
     });
     const count = document.getElementById('sideProjectCount');
     if (count) count.textContent = projects.length;
@@ -467,7 +534,7 @@
       const summary = scheduleSummary(project.id);
       return `<button class="side-project ${state.project === project.id ? 'active' : ''}" data-side-project="${esc(project.id)}"><strong>${esc(project.name)}</strong><span>${esc(summary.current?.name || delayLabel(summary))}</span></button>`;
     }).join('') || '<span class="muted" style="padding:8px 14px;font-size:12px">Нет активных объектов</span>';
-    list.querySelectorAll('[data-side-project]').forEach(button => button.onclick = () => { state.project = button.dataset.sideProject; state.tab = 'projects'; projectSection = 'overview'; render(); });
+    list.querySelectorAll('[data-side-project]').forEach(button => button.onclick = () => navigateProject(button.dataset.sideProject));
   }
 
   function openProjectCreateCloud() {
@@ -532,11 +599,11 @@
       ...delayed.map(({project, stage}) => `<button class="attention-item" data-open-project="${esc(project.id)}" data-section="schedule"><span class="attention-icon">!</span><span class="grow"><strong>${esc(project.name)} · ${esc(stage.name)}</strong><span>${esc(delayLabel(scheduleSummary(project.id)))}</span></span></button>`),
       ...pendingItems.map(expense => `<button class="attention-item" data-open-project="${esc(expense.projectId)}" data-section="finance"><span class="attention-icon">₽</span><span class="grow"><strong>Компенсировать · ${money(expense.amount)}</strong><span>${esc(proj(expense.projectId)?.name || '')} · ${esc(expense.supplier || expense.category)}</span></span></button>`),
     ];
-    $('#app').innerHTML = `<div class="page-kicker">ADMA · ОБЗОР</div><div class="page-title-row"><div><h2>Главная</h2><p>Состояние объектов и вопросы, которые требуют внимания</p></div>${canManageProjects() ? '<button id="homeAddProject" class="btn primary">+ Объект</button>' : ''}</div><section class="dashboard-metrics"><button class="card dashboard-metric" data-home-tab="projects"><small>Активные объекты</small><strong>${projects.length}</strong><span>${projects.filter(p => scheduleSummary(p.id).current).length} сейчас в работе</span></button><div class="card dashboard-metric"><small>Расходы за месяц</small><strong>${money(month)}</strong><span>Чеки / разное</span></div><div class="card dashboard-metric"><small>Компенсировано</small><strong>${money(reimb())}</strong><span>Возвращено заказчиками</span></div><button class="card dashboard-metric featured" data-home-tab="due"><small>К компенсации</small><strong>${money(due())}</strong><span>${state.expenses.filter(pending).length} незакрытых расходов</span></button></section><section class="dashboard-columns"><div class="card panel-card"><div class="section compact"><h2>Объекты</h2><button class="btn secondary" data-home-tab="projects">Все объекты →</button></div><div class="activity-list">${projects.length ? projects.map(project => { const summary = scheduleSummary(project.id); return `<button class="activity-item" data-open-project="${esc(project.id)}"><span class="status-dot ${summary.delay ? 'critical' : summary.stages.length ? '' : 'warn'}"></span><span class="grow"><strong>${esc(project.name)} · ${summary.progress}%</strong><span>${esc(summary.current?.name || delayLabel(summary))}</span></span><strong>${esc(summary.delay ? `−${summary.delay} дн.` : summary.stages.length ? 'По плану' : 'Нет графика')}</strong></button>`; }).join('') : '<div class="empty">Активных объектов пока нет</div>'}</div></div><div class="card panel-card"><div class="section compact"><h2>Требует внимания</h2><span class="badge ${attention.length ? 'pending' : 'paid'}">${attention.length}</span></div><div class="attention-list">${attention.length ? attention.join('') : '<div class="empty">Сейчас всё спокойно</div>'}</div></div></section><section class="card panel-card"><div class="section compact"><h2>Последние операции</h2></div><div id="list"></div></section>`;
+    $('#app').innerHTML = `${pageHeader('ADMA · ОБЗОР', 'Главная', 'Состояние объектов и вопросы, которые требуют внимания', canManageProjects() ? '<button id="homeAddProject" class="btn primary">+ Объект</button>' : '')}<section class="dashboard-metrics"><button class="card dashboard-metric" data-home-tab="projects"><small>Активные объекты</small><strong>${projects.length}</strong><span>${projects.filter(p => scheduleSummary(p.id).current).length} сейчас в работе</span></button><div class="card dashboard-metric"><small>Расходы за месяц</small><strong>${money(month)}</strong><span>Чеки / разное</span></div><div class="card dashboard-metric"><small>Компенсировано</small><strong>${money(reimb())}</strong><span>Возвращено заказчиками</span></div><button class="card dashboard-metric featured" data-home-tab="finance"><small>К компенсации</small><strong>${money(due())}</strong><span>${state.expenses.filter(pending).length} незакрытых расходов</span></button></section><section class="dashboard-columns"><div class="card panel-card"><div class="section compact"><h2>Объекты</h2><button class="btn secondary" data-home-tab="projects">Все объекты →</button></div><div class="activity-list">${projects.length ? projects.map(project => { const summary = scheduleSummary(project.id); return `<button class="activity-item" data-open-project="${esc(project.id)}"><span class="status-dot ${summary.delay ? 'critical' : summary.stages.length ? '' : 'warn'}"></span><span class="grow"><strong>${esc(project.name)} · ${summary.progress}%</strong><span>${esc(summary.current?.name || delayLabel(summary))}</span></span><strong>${esc(summary.delay ? `−${summary.delay} дн.` : summary.stages.length ? 'По плану' : 'Нет графика')}</strong></button>`; }).join('') : '<div class="empty">Активных объектов пока нет</div>'}</div></div><div class="card panel-card"><div class="section compact"><h2>Требует внимания</h2><span class="badge ${attention.length ? 'pending' : 'paid'}">${attention.length}</span></div><div class="attention-list">${attention.length ? attention.join('') : '<div class="empty">Сейчас всё спокойно</div>'}</div></div></section><section class="card panel-card"><div class="section compact"><h2>Последние операции</h2></div><div id="list"></div></section>`;
     renderExpenses(recent, $('#list'));
     const add = document.getElementById('homeAddProject'); if (add) add.onclick = openProjectCreateCloud;
-    document.querySelectorAll('[data-home-tab]').forEach(button => button.onclick = () => { state.project = null; state.tab = button.dataset.homeTab; render(); });
-    document.querySelectorAll('[data-open-project]').forEach(button => button.onclick = () => { state.project = button.dataset.openProject; state.tab = 'projects'; projectSection = button.dataset.section || 'overview'; render(); });
+    document.querySelectorAll('[data-home-tab]').forEach(button => button.onclick = () => navigateGlobal(button.dataset.homeTab));
+    document.querySelectorAll('[data-open-project]').forEach(button => button.onclick = () => navigateProject(button.dataset.openProject, button.dataset.section || 'overview', button.dataset.section === 'finance' ? 'checks' : null));
   }
 
   function renderProjectsCloud() {
@@ -562,7 +629,7 @@
       const meta = [p.address, p.area ? `${p.area} м²` : ''].filter(Boolean).join(' · ');
       const summary = scheduleSummary(p.id);
       b.innerHTML = `<div class="row project-card-title"><strong>${esc(p.name)}</strong><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted project-card-address">${esc(meta || 'Адрес и площадь не указаны')}</div><div class="project-card-data"><div><small class="muted">Заказчик</small><strong>${esc(p.client || 'Не указан')}</strong></div><div><small class="muted">Плановая сдача</small><strong>${esc(projectDate(p.plannedEndDate))}</strong></div><div><small class="muted">Текущий этап</small><strong>${esc(summary.current?.name || (summary.stages.length ? 'Ожидает начала' : 'График не заполнен'))}</strong></div><div><small class="muted">Готовность</small><strong>${summary.stages.length ? summary.progress + '%' : '—'}</strong></div></div>${summary.stages.length ? `<div class="progress-track"><div class="progress-fill ${summary.delay ? 'warn' : ''}" style="width:${summary.progress}%"></div></div>` : ''}<div class="project-card-footer"><span>${esc(delayLabel(summary))} · ${money(due(p.id))} к компенсации</span><strong>Открыть объект ›</strong></div>`;
-      b.onclick = () => { state.project = p.id; projectSection = 'overview'; render(); };
+      b.onclick = () => navigateProject(p.id);
       l.appendChild(b);
     });
   }
@@ -600,7 +667,23 @@
   function renderProjectFinance(p) {
     const arr = [...expensesFor(p.id)].sort((a, b) => b.date.localeCompare(a.date));
     const isArchived = p.status === 'archived';
-    $('#projectSection').innerHTML = `<section class="hero"><small>К возмещению по объекту</small><div class="amount">${money(due(p.id))}</div><small>Чеки / Разное</small></section><section class="grid"><div class="card metric"><small>Всего расходов</small><strong>${money(spent(p.id))}</strong></div><div class="card metric"><small>Компенсировано</small><strong>${money(reimb(p.id))}</strong></div></section><div id="projectFinanceActions"></div><div class="section"><h2>Чеки / Разное</h2>${!isArchived ? '<button id="addExpense" class="btn primary">+ Расход</button>' : ''}</div><div id="list"></div>`;
+    $('#projectSection').innerHTML = `${sectionTabs(projectFinanceSections, projectFinanceSection, 'data-project-finance-section')}<div id="projectFinanceContent"></div>`;
+    document.querySelectorAll('[data-project-finance-section]').forEach(button => button.onclick = () => { projectFinanceSection = button.dataset.projectFinanceSection; render(); });
+    const content = document.getElementById('projectFinanceContent');
+    if (projectFinanceSection === 'summary') {
+      content.innerHTML = `<section class="project-summary-grid"><div class="card project-summary-card disabled-summary"><small>Акты</small><strong>—</strong><span>Данные появятся на этапе 4</span></div><div class="card project-summary-card disabled-summary"><small>Накладные</small><strong>—</strong><span>Данные появятся на этапе 4</span></div><button class="card project-summary-card" data-finance-open="checks"><small>Чеки / Разное</small><strong>${money(spent(p.id))}</strong><span>${arr.length} записей</span></button><button class="card project-summary-card featured" data-finance-open="checks"><small>К компенсации</small><strong>${money(due(p.id))}</strong><span>${arr.filter(pending).length} не закрыто</span></button></section>${moduleScreen('₽', 'Финансы объекта', 'Сводка готова к подключению актов и накладных на следующем этапе.', 'Акты + Накладные + Чеки / Разное → Объект')}`;
+      content.querySelectorAll('[data-finance-open]').forEach(button => button.onclick = () => { projectFinanceSection = button.dataset.financeOpen; render(); });
+      return;
+    }
+    if (projectFinanceSection === 'acts') {
+      content.innerHTML = moduleScreen('А', 'Акты', 'Структура экрана подготовлена. Суммы, оплаты и прибыль будут реализованы на этапе 4.', 'Акт → Объект / Этап / Оплаты');
+      return;
+    }
+    if (projectFinanceSection === 'waybills') {
+      content.innerHTML = moduleScreen('Н', 'Накладные', 'Структура экрана подготовлена. Поставщики, оплаты и остатки будут реализованы на этапе 4.', 'Накладная → Объект / Оплаты');
+      return;
+    }
+    content.innerHTML = `<section class="hero finance-hero"><small>К возмещению по объекту</small><div class="amount">${money(due(p.id))}</div><small>Чеки / Разное не уменьшают прибыль объекта</small></section><section class="grid"><div class="card metric"><small>Всего чеков / разного</small><strong>${money(spent(p.id))}</strong></div><div class="card metric"><small>Компенсировано</small><strong>${money(reimb(p.id))}</strong></div></section><div id="projectFinanceActions"></div><div class="section"><h2>Чеки / Разное</h2>${!isArchived ? '<button id="addExpense" class="btn primary">+ Расход</button>' : ''}</div><div id="list"></div>`;
     const pdfExpenses = pendingExpensesForPdf(p.id);
     const pdfCard = document.createElement('div');
     pdfCard.className = 'card';
@@ -669,7 +752,7 @@
     }
     const isArchived = p.status === 'archived';
     $('#app').innerHTML = projectHeader(p);
-    $('#back').onclick = () => { state.project = null; state.tab = 'projects'; showArchivedProjects = isArchived; render(); };
+    $('#back').onclick = () => { showArchivedProjects = isArchived; navigateGlobal('projects'); };
     const edit = document.getElementById('editProjectCloud');
     if (edit) edit.onclick = () => openProjectEditCloud(p.id);
     const archive = document.getElementById('archiveProjectCloud');
@@ -680,7 +763,7 @@
     else if (projectSection === 'schedule') renderProjectSchedule(p);
     else if (projectSection === 'finance') renderProjectFinance(p);
     else renderProjectPlaceholder(projectSection);
-    document.querySelectorAll('[data-project-section]').forEach(button => button.onclick = () => { projectSection = button.dataset.projectSection; render(); });
+    document.querySelectorAll('[data-project-section]').forEach(button => button.onclick = () => navigateProject(p.id, button.dataset.projectSection));
   }
 
   // TEAM_ACCESS_V13
@@ -761,14 +844,45 @@
     }
   }
 
+  function renderGlobalFinanceCloud() {
+    const pendingExpenses = state.expenses.filter(pending).sort((a, b) => b.date.localeCompare(a.date));
+    const projects = activeProjects();
+    $('#app').innerHTML = `${pageHeader('ADMA · ФИНАНСЫ', 'Финансы', 'Агрегированная картина компании без дублирования финансов объектов')}${sectionTabs([['summary', 'Сводка'], ['general', 'Общие расходы']], globalFinanceSection, 'data-global-finance-section')}<div id="globalFinanceContent"></div>`;
+    document.querySelectorAll('[data-global-finance-section]').forEach(button => button.onclick = () => { globalFinanceSection = button.dataset.globalFinanceSection; render(); });
+    const content = document.getElementById('globalFinanceContent');
+    if (globalFinanceSection === 'general') {
+      content.innerHTML = moduleScreen('₽', 'Общие расходы', 'Экран и маршрут подготовлены. Учёт расходов компании вне объектов будет реализован отдельным функциональным этапом.', 'Общие расходы → ADMA, без обязательной связи с объектом');
+      return;
+    }
+    content.innerHTML = `<section class="dashboard-metrics"><div class="card dashboard-metric disabled-summary"><small>Прибыль объектов</small><strong>—</strong><span>После подключения актов и накладных</span></div><div class="card dashboard-metric disabled-summary"><small>Общие расходы</small><strong>—</strong><span>Модуль пока не ведёт данные</span></div><div class="card dashboard-metric"><small>Активные объекты</small><strong>${projects.length}</strong><span>Реальные объекты в работе</span></div><div class="card dashboard-metric featured"><small>К компенсации</small><strong>${money(due())}</strong><span>${pendingExpenses.length} незакрытых расходов</span></div></section><section class="card panel-card global-finance-list"><div class="section compact"><div><h2>Чеки / Разное к компенсации</h2><p class="muted">PDF формируется внутри нужного объекта</p></div></div><div id="list"></div></section>`;
+    renderExpenses(pendingExpenses, content.querySelector('#list'));
+  }
+
+  function renderFutureModuleCloud(tab) {
+    const modules = {
+      leads: ['◇', 'Заявки', 'Базовый экран и маршрут готовы. Воронка и превращение заявки в объект будут реализованы на отдельном этапе.', 'Дизайнер → Заявка → Объект'],
+      designers: ['✦', 'Дизайнеры', 'Базовый экран CRM готов. Контакты, воронка и история взаимодействий появятся на отдельном этапе.', 'Дизайнер → Заявки / Объекты'],
+      masters: ['◎', 'Мастера', 'Базовый экран общей базы готов. Специализации, занятость и назначения появятся на отдельном этапе.', 'Мастер → Объект / Этап'],
+    };
+    const [icon, title, description, relation] = modules[tab];
+    $('#app').innerHTML = `${pageHeader(`ADMA · ${title.toUpperCase()}`, title, 'Раздел встроен в единую структуру приложения')}${moduleScreen(icon, title, description, relation)}`;
+  }
+
+  function renderFallbackCloud() {
+    if (state.tab === 'finance') return renderGlobalFinanceCloud();
+    if (['leads', 'designers', 'masters'].includes(state.tab)) return renderFutureModuleCloud(state.tab);
+    return renderMoreCloud();
+  }
+
   function renderMoreCloud() {
     const role = currentUser?.role || 'foreman';
     const name = [currentUser?.first_name, currentUser?.last_name].filter(Boolean).join(' ');
-    $('#app').innerHTML = `<div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
+    $('#app').innerHTML = `${pageHeader('ADMA · ПРОФИЛЬ', 'Ещё', 'Разделы приложения и настройки доступа')}<div class="mobile-module-links"><button class="card mobile-module-link" data-mobile-route="leads"><span>◇</span><strong>Заявки</strong><small>Воронка обращений</small></button><button class="card mobile-module-link" data-mobile-route="designers"><span>✦</span><strong>Дизайнеры</strong><small>Партнёрская CRM</small></button><button class="card mobile-module-link" data-mobile-route="masters"><span>◎</span><strong>Мастера</strong><small>Команда и занятость</small></button></div><div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
       <div class="card"><small class="muted">Ваш доступ</small><strong style="display:block;margin-top:6px">${roleLabel(role)}</strong>${name ? `<div class="muted" style="margin-top:4px">${esc(name)}</div>` : ''}</div>
       ${role === 'owner' ? '<div class="card"><strong>Команда</strong><p class="muted">Новые сотрудники сначала открывают Mini App через @Admafinance_bot. После этого они появятся здесь и будут ждать подтверждения.</p><button id="teamAccess" class="btn primary" style="width:100%">Команда и доступ</button></div>' : ''}
       <div class="card"><strong>Вход в браузере</strong><p class="muted">${currentUser?.web_login ? 'Ваш логин: ' + esc(currentUser.web_login) : 'Настройте логин и пароль для входа без Telegram.'}</p><button id="webCredentials" class="btn secondary">${currentUser?.web_login ? 'Изменить пароль' : 'Настроить вход'}</button>${!initData ? '<button id="webLogout" class="btn danger" style="margin-left:8px">Выйти</button>' : ''}</div>
-      <div class="card"><strong>ADMA Finance</strong><p class="muted">Управление объектами и финансами · облачная версия · v21</p></div>`;
+      <div class="card"><strong>ADMA Dashboard</strong><p class="muted">Единое рабочее пространство · frontend-основа v22</p></div>`;
+    document.querySelectorAll('[data-mobile-route]').forEach(button => button.onclick = () => navigateGlobal(button.dataset.mobileRoute));
     const teamBtn = document.getElementById('teamAccess');
     if (teamBtn) teamBtn.onclick = openTeamAccess;
     document.getElementById('webCredentials').onclick = () => openWebCredentials(currentUser);
@@ -777,13 +891,14 @@
   }
 
   function installCloudHandlers() {
-    renderMore = renderMoreCloud;
+    renderMore = renderFallbackCloud;
     renderHome = renderHomeCloud;
     renderProjects = renderProjectsCloud;
     renderProject = renderProjectCloud;
     renderDue = renderDueCloud;
     const baseRender = render;
-    render = function() { baseRender(); syncAppChrome(); };
+    render = function() { baseRender(); syncAppChrome(); syncRouteHash(); };
+    window.addEventListener('hashchange', () => { applyHashRoute(); render(); });
     const originalOpenExpense = openExpense;
     openExpense = function(pid) {
       if (savingExpense) return;
@@ -1051,6 +1166,7 @@
       cloudReady = true;
       installCloudHandlers();
       delete document.body.dataset.locked;
+      applyHashRoute();
       render();
       banner('Облако подключено · ' + roleLabel(currentUser.role), 'ok');
     } catch (e) {
