@@ -96,9 +96,9 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     await page.click('[data-tab="due"]');assert.equal(await page.locator('#pdfAllPending').count(),0);
     await page.click('[data-tab="projects"]');await page.getByRole('button',{name:/Тестовый объект/}).click();
     assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);
-    assert.match(await page.locator('#view').innerText(),/86[,.]5 м²/);
-    assert.match(await page.locator('#view').innerText(),/Иван Петров/);
-    assert.match(await page.locator('#view').innerText(),/График не заполнен/);
+    assert.match(await page.locator('#app').innerText(),/86[,.]5 м²/);
+    assert.match(await page.locator('#app').innerText(),/Иван Петров/);
+    assert.match(await page.locator('#app').innerText(),/График не заполнен/);
     await page.click('#editProjectCloud');assert.equal(await page.inputValue('#pArea'),'86.5');assert.equal(await page.inputValue('#pContract'),'АДМА-17');await page.click('#cancelProject');
     await page.click('[data-project-section="finance"]');
     await page.click('#pdfAllPending');await until(()=>pdfs.length===1);
