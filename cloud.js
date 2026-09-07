@@ -21,6 +21,10 @@
     ['overview', 'Обзор'], ['schedule', 'График'], ['finance', 'Финансы'],
     ['team', 'Команда'], ['documents', 'Документы'], ['tasks', 'Задачи'], ['photos', 'Фото'],
   ];
+  const stageStatuses = {
+    planned: 'Запланирован', in_progress: 'В работе', completed: 'Выполнен',
+    delayed: 'Задерживается', paused: 'Приостановлен',
+  };
 
   const optionalValue = value => String(value || '').trim() || null;
   const projectStatusLabel = status => projectStatuses[status] || projectStatuses.active;
@@ -135,6 +139,17 @@
     };
   }
 
+  function mapStage(s) {
+    return {
+      id: s.id, projectId: s.project_id, name: s.name, position: Number(s.position || 0),
+      plannedStart: s.planned_start || '', plannedEnd: s.planned_end || '',
+      actualStart: s.actual_start || '', actualEnd: s.actual_end || '',
+      progress: Number(s.progress || 0), status: s.status || 'planned',
+      responsibleUserId: s.responsible_user_id || '', workCost: s.work_cost == null ? null : Number(s.work_cost),
+      comment: s.comment || '', createdAt: s.created_at || '',
+    };
+  }
+
   function mapExpense(e) {
     return {
       id: e.id,
@@ -156,6 +171,7 @@
     const data = await api('load');
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
+    state.stages = (data.stages || []).map(mapStage);
     save();
     render();
     return data;
@@ -394,6 +410,66 @@
     return state.projects.filter(p => p.status === 'archived');
   }
 
+  function stagesFor(projectId) {
+    return (state.stages || []).filter(s => s.projectId === projectId).sort((a, b) => a.position - b.position || String(a.plannedStart).localeCompare(String(b.plannedStart)) || String(a.createdAt).localeCompare(String(b.createdAt)));
+  }
+
+  function daysBetween(from, to) {
+    if (!from || !to) return 0;
+    return Math.round((new Date(to + 'T12:00:00') - new Date(from + 'T12:00:00')) / 86400000);
+  }
+
+  function scheduleSummary(projectId) {
+    const stages = stagesFor(projectId);
+    if (!stages.length) return { stages, progress: 0, plannedProgress: null, current: null, next: null, delay: 0, delayed: [] };
+    const progress = Math.round(stages.reduce((total, stage) => total + stage.progress, 0) / stages.length);
+    const today = new Date().toISOString().slice(0, 10);
+    const dated = stages.filter(stage => stage.plannedStart && stage.plannedEnd);
+    const plannedProgress = dated.length ? Math.round(dated.reduce((total, stage) => {
+      if (today <= stage.plannedStart) return total;
+      if (today >= stage.plannedEnd) return total + 100;
+      const duration = Math.max(1, daysBetween(stage.plannedStart, stage.plannedEnd));
+      return total + Math.max(0, Math.min(100, daysBetween(stage.plannedStart, today) / duration * 100));
+    }, 0) / dated.length) : null;
+    const delayed = stages.filter(stage => stage.status !== 'completed' && stage.progress < 100 && stage.plannedEnd && stage.plannedEnd < today);
+    const explicitDelayed = stages.filter(stage => stage.status === 'delayed' && !delayed.includes(stage));
+    delayed.push(...explicitDelayed);
+    const delay = delayed.reduce((max, stage) => Math.max(max, stage.plannedEnd ? daysBetween(stage.plannedEnd, today) : 1), 0);
+    const current = stages.find(stage => ['in_progress', 'delayed', 'paused'].includes(stage.status)) || stages.find(stage => stage.progress > 0 && stage.progress < 100) || null;
+    const currentIndex = current ? stages.indexOf(current) : -1;
+    const next = stages.slice(Math.max(0, currentIndex + 1)).find(stage => stage.status === 'planned') || null;
+    return { stages, progress, plannedProgress, current, next, delay, delayed };
+  }
+
+  function delayLabel(summary) {
+    if (!summary.stages.length) return 'График не заполнен';
+    if (summary.delay > 0) return `Отставание ${summary.delay} дн.`;
+    return 'По плану';
+  }
+
+  function syncAppChrome() {
+    const projects = activeProjects();
+    if (!state.project && state.tab === 'home') document.getElementById('title').textContent = 'Главная';
+    document.querySelectorAll('[data-side-tab]').forEach(button => {
+      button.classList.toggle('active', !state.project && button.dataset.sideTab === state.tab);
+      button.onclick = () => { state.project = null; state.tab = button.dataset.sideTab; render(); };
+    });
+    const count = document.getElementById('sideProjectCount');
+    if (count) count.textContent = projects.length;
+    const name = [currentUser?.first_name, currentUser?.last_name].filter(Boolean).join(' ') || currentUser?.web_login || roleLabel(currentUser?.role || 'foreman');
+    const nameEl = document.getElementById('headerName');
+    const avatar = document.getElementById('headerAvatar');
+    if (nameEl) nameEl.textContent = name;
+    if (avatar) avatar.textContent = name.trim().slice(0, 2).toUpperCase() || 'A';
+    const list = document.getElementById('sideProjects');
+    if (!list) return;
+    list.innerHTML = projects.map(project => {
+      const summary = scheduleSummary(project.id);
+      return `<button class="side-project ${state.project === project.id ? 'active' : ''}" data-side-project="${esc(project.id)}"><strong>${esc(project.name)}</strong><span>${esc(summary.current?.name || delayLabel(summary))}</span></button>`;
+    }).join('') || '<span class="muted" style="padding:8px 14px;font-size:12px">Нет активных объектов</span>';
+    list.querySelectorAll('[data-side-project]').forEach(button => button.onclick = () => { state.project = button.dataset.sideProject; state.tab = 'projects'; projectSection = 'overview'; render(); });
+  }
+
   function openProjectCreateCloud() {
     if (!canManageProjects()) return;
     editingProjectId = null;
@@ -449,8 +525,18 @@
     const m = new Date().toISOString().slice(0, 7);
     const month = sum(state.expenses.filter(e => e.date.startsWith(m)));
     const recent = [...state.expenses].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
-    $('#app').innerHTML = `<section class="hero"><small>Заказчики должны ADMA</small><div class="amount">${money(due())}</div><small>${state.expenses.filter(pending).length} расходов к возмещению</small></section><section class="grid"><div class="card metric"><small>Активные объекты</small><strong>${activeProjects().length}</strong></div><div class="card metric"><small>Расходы за месяц</small><strong>${money(month)}</strong></div><div class="card metric"><small>Всего расходов</small><strong>${money(spent())}</strong></div><div class="card metric"><small>Компенсировано</small><strong>${money(reimb())}</strong></div></section><div class="section"><h2>Последние расходы</h2></div><div id="list"></div>`;
+    const projects = activeProjects();
+    const delayed = projects.flatMap(project => scheduleSummary(project.id).delayed.map(stage => ({ project, stage })));
+    const pendingItems = state.expenses.filter(pending).slice(0, 4);
+    const attention = [
+      ...delayed.map(({project, stage}) => `<button class="attention-item" data-open-project="${esc(project.id)}" data-section="schedule"><span class="attention-icon">!</span><span class="grow"><strong>${esc(project.name)} · ${esc(stage.name)}</strong><span>${esc(delayLabel(scheduleSummary(project.id)))}</span></span></button>`),
+      ...pendingItems.map(expense => `<button class="attention-item" data-open-project="${esc(expense.projectId)}" data-section="finance"><span class="attention-icon">₽</span><span class="grow"><strong>Компенсировать · ${money(expense.amount)}</strong><span>${esc(proj(expense.projectId)?.name || '')} · ${esc(expense.supplier || expense.category)}</span></span></button>`),
+    ];
+    $('#app').innerHTML = `<div class="page-kicker">ADMA · ОБЗОР</div><div class="page-title-row"><div><h2>Главная</h2><p>Состояние объектов и вопросы, которые требуют внимания</p></div>${canManageProjects() ? '<button id="homeAddProject" class="btn primary">+ Объект</button>' : ''}</div><section class="dashboard-metrics"><button class="card dashboard-metric" data-home-tab="projects"><small>Активные объекты</small><strong>${projects.length}</strong><span>${projects.filter(p => scheduleSummary(p.id).current).length} сейчас в работе</span></button><div class="card dashboard-metric"><small>Расходы за месяц</small><strong>${money(month)}</strong><span>Чеки / разное</span></div><div class="card dashboard-metric"><small>Компенсировано</small><strong>${money(reimb())}</strong><span>Возвращено заказчиками</span></div><button class="card dashboard-metric featured" data-home-tab="due"><small>К компенсации</small><strong>${money(due())}</strong><span>${state.expenses.filter(pending).length} незакрытых расходов</span></button></section><section class="dashboard-columns"><div class="card panel-card"><div class="section compact"><h2>Объекты</h2><button class="btn secondary" data-home-tab="projects">Все объекты →</button></div><div class="activity-list">${projects.length ? projects.map(project => { const summary = scheduleSummary(project.id); return `<button class="activity-item" data-open-project="${esc(project.id)}"><span class="status-dot ${summary.delay ? 'critical' : summary.stages.length ? '' : 'warn'}"></span><span class="grow"><strong>${esc(project.name)} · ${summary.progress}%</strong><span>${esc(summary.current?.name || delayLabel(summary))}</span></span><strong>${esc(summary.delay ? `−${summary.delay} дн.` : summary.stages.length ? 'По плану' : 'Нет графика')}</strong></button>`; }).join('') : '<div class="empty">Активных объектов пока нет</div>'}</div></div><div class="card panel-card"><div class="section compact"><h2>Требует внимания</h2><span class="badge ${attention.length ? 'pending' : 'paid'}">${attention.length}</span></div><div class="attention-list">${attention.length ? attention.join('') : '<div class="empty">Сейчас всё спокойно</div>'}</div></div></section><section class="card panel-card"><div class="section compact"><h2>Последние операции</h2></div><div id="list"></div></section>`;
     renderExpenses(recent, $('#list'));
+    const add = document.getElementById('homeAddProject'); if (add) add.onclick = openProjectCreateCloud;
+    document.querySelectorAll('[data-home-tab]').forEach(button => button.onclick = () => { state.project = null; state.tab = button.dataset.homeTab; render(); });
+    document.querySelectorAll('[data-open-project]').forEach(button => button.onclick = () => { state.project = button.dataset.openProject; state.tab = 'projects'; projectSection = button.dataset.section || 'overview'; render(); });
   }
 
   function renderProjectsCloud() {
@@ -474,20 +560,41 @@
       const b = document.createElement('button');
       b.className = 'card project-list-card';
       const meta = [p.address, p.area ? `${p.area} м²` : ''].filter(Boolean).join(' · ');
-      b.innerHTML = `<div class="row project-card-title"><strong>${esc(p.name)}</strong><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted project-card-address">${esc(meta || 'Адрес и площадь не указаны')}</div><div class="project-card-data"><div><small class="muted">Заказчик</small><strong>${esc(p.client || 'Не указан')}</strong></div><div><small class="muted">Плановая сдача</small><strong>${esc(projectDate(p.plannedEndDate))}</strong></div><div><small class="muted">Текущий этап</small><strong>График не заполнен</strong></div><div><small class="muted">К компенсации</small><strong>${money(due(p.id))}</strong></div></div><div class="project-card-footer"><span>${expensesFor(p.id).length} расходов · ${money(spent(p.id))}</span><strong>Открыть объект ›</strong></div>`;
+      const summary = scheduleSummary(p.id);
+      b.innerHTML = `<div class="row project-card-title"><strong>${esc(p.name)}</strong><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted project-card-address">${esc(meta || 'Адрес и площадь не указаны')}</div><div class="project-card-data"><div><small class="muted">Заказчик</small><strong>${esc(p.client || 'Не указан')}</strong></div><div><small class="muted">Плановая сдача</small><strong>${esc(projectDate(p.plannedEndDate))}</strong></div><div><small class="muted">Текущий этап</small><strong>${esc(summary.current?.name || (summary.stages.length ? 'Ожидает начала' : 'График не заполнен'))}</strong></div><div><small class="muted">Готовность</small><strong>${summary.stages.length ? summary.progress + '%' : '—'}</strong></div></div>${summary.stages.length ? `<div class="progress-track"><div class="progress-fill ${summary.delay ? 'warn' : ''}" style="width:${summary.progress}%"></div></div>` : ''}<div class="project-card-footer"><span>${esc(delayLabel(summary))} · ${money(due(p.id))} к компенсации</span><strong>Открыть объект ›</strong></div>`;
       b.onclick = () => { state.project = p.id; projectSection = 'overview'; render(); };
       l.appendChild(b);
     });
   }
 
   function projectHeader(p) {
-    const meta = [p.area ? `${p.area} м²` : '', p.client ? `Заказчик: ${p.client}` : ''].filter(Boolean).join(' · ');
-    return `<button id="back" class="btn secondary">‹ Объекты</button><section class="card object-head"><div class="row"><div class="grow"><div class="row object-title-row"><h2>${esc(p.name)}</h2><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted">${esc(p.address || 'Адрес не указан')}</div><div class="muted object-meta">${esc(meta || 'Данные объекта ещё не заполнены')}</div></div>${canManageProjects() ? `<div class="object-actions"><button id="editProjectCloud" class="btn secondary">Редактировать</button><button id="archiveProjectCloud" class="btn ${p.status === 'archived' ? 'primary' : 'danger'}">${p.status === 'archived' ? 'Вернуть в работу' : 'В архив'}</button></div>` : ''}</div><div class="object-schedule"><div><small>Готовность</small><strong>—</strong></div><div><small>Текущий этап</small><strong>График не заполнен</strong></div><div><small>Начало</small><strong>${esc(projectDate(p.startDate))}</strong></div><div><small>Плановая сдача</small><strong>${esc(projectDate(p.plannedEndDate))}</strong></div></div></section><nav class="project-tabs" aria-label="Разделы объекта">${projectSections.map(([id, label]) => `<button class="project-tab ${projectSection === id ? 'active' : ''}" data-project-section="${id}">${label}</button>`).join('')}</nav><div id="projectSection"></div>`;
+    const summary = scheduleSummary(p.id);
+    const meta = [p.address, p.area ? `${p.area} м²` : ''].filter(Boolean).join(' · ');
+    return `<div class="object-breadcrumb"><button id="back" class="breadcrumb-button"><strong>Объекты</strong></button> / ${esc(p.name)}</div><section class="card object-head"><div class="row"><div class="grow"><div class="row object-title-row"><h2>${esc(p.name)}</h2><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted">${esc(meta || 'Адрес и площадь не указаны')}</div><div class="muted object-meta">${esc(p.client ? `Заказчик: ${p.client}` : 'Заказчик не указан')}</div></div><div class="object-actions">${p.status !== 'archived' ? '<button id="objectOperation" class="btn primary">+ Операция</button>' : ''}${canManageProjects() ? `<button id="editProjectCloud" class="btn secondary">Редактировать</button><button id="archiveProjectCloud" class="btn ${p.status === 'archived' ? 'primary' : 'danger'}">${p.status === 'archived' ? 'Вернуть в работу' : 'В архив'}</button>` : ''}</div></div><div class="object-schedule"><div><small>Готовность</small><strong>${summary.stages.length ? summary.progress + '%' : '—'}</strong></div><div><small>Текущий этап</small><strong>${esc(summary.current?.name || (summary.stages.length ? 'Ожидает начала' : 'График не заполнен'))}</strong></div><div><small>Начало</small><strong>${esc(projectDate(p.startDate))}</strong></div><div><small>Отклонение</small><strong>${esc(delayLabel(summary))}</strong></div></div></section><nav class="project-tabs" aria-label="Разделы объекта">${projectSections.map(([id, label]) => `<button class="project-tab ${projectSection === id ? 'active' : ''}" data-project-section="${id}">${label}</button>`).join('')}</nav><div id="projectSection"></div>`;
   }
 
   function renderProjectOverview(p) {
+    const summary = scheduleSummary(p.id);
     const notes = p.comment ? `<div class="card"><strong>Примечания</strong><p>${esc(p.comment)}</p></div>` : '';
-    $('#projectSection').innerHTML = `<section class="project-summary-grid"><button class="card project-summary-card" data-project-section="finance"><small>Чеки / Разное</small><strong>${money(spent(p.id))}</strong><span>${expensesFor(p.id).length} записей</span></button><button class="card project-summary-card" data-project-section="finance"><small>К компенсации</small><strong>${money(due(p.id))}</strong><span>${state.expenses.filter(e => e.projectId === p.id && pending(e)).length} не закрыто</span></button><div class="card project-summary-card disabled-summary"><small>Акты</small><strong>Следующий этап</strong><span>Будут подключены в финансах</span></div><div class="card project-summary-card disabled-summary"><small>Накладные</small><strong>Следующий этап</strong><span>Будут подключены в финансах</span></div></section><section class="object-overview-grid"><div class="card"><div class="section compact"><h2>Ход работ</h2><span class="badge neutral">График не настроен</span></div><p class="muted">На следующем этапе здесь появятся этапы, готовность и отклонение от плана.</p><button class="btn secondary" data-project-section="schedule">Открыть график</button></div><div class="card"><div class="section compact"><h2>Информация</h2></div><dl class="object-details"><div><dt>Заказчик</dt><dd>${esc(p.client || 'Не указан')}</dd></div><div><dt>Телефон</dt><dd>${esc(p.clientPhone || 'Не указан')}</dd></div><div><dt>Договор</dt><dd>${esc(p.contractNumber || 'Не указан')}</dd></div><div><dt>Фактическая сдача</dt><dd>${esc(projectDate(p.actualEndDate))}</dd></div><div><dt>Гарантия до</dt><dd>${esc(projectDate(p.warrantyUntil))}</dd></div></dl></div></section>${notes}`;
+    const attention = summary.delayed.map(stage => `<button class="attention-item" data-project-section="schedule"><span class="attention-icon">!</span><span class="grow"><strong>${esc(stage.name)} задерживается</strong><span>${esc(stage.plannedEnd ? `Плановое окончание ${projectDate(stage.plannedEnd)}` : 'Проверьте статус этапа')}</span></span></button>`);
+    const pendingCount = state.expenses.filter(e => e.projectId === p.id && pending(e)).length;
+    if (pendingCount) attention.push(`<button class="attention-item" data-project-section="finance"><span class="attention-icon">₽</span><span class="grow"><strong>К компенсации ${money(due(p.id))}</strong><span>${pendingCount} незакрытых расходов</span></span></button>`);
+    $('#projectSection').innerHTML = `<section class="project-summary-grid"><div class="card project-summary-card disabled-summary"><small>Акты</small><strong>—</strong><span>Подключим на этапе 4</span></div><div class="card project-summary-card disabled-summary"><small>Накладные</small><strong>—</strong><span>Подключим на этапе 4</span></div><button class="card project-summary-card" data-project-section="finance"><small>Чеки / Разное</small><strong>${money(spent(p.id))}</strong><span>${expensesFor(p.id).length} записей</span></button><button class="card project-summary-card featured" data-project-section="finance"><small>К компенсации</small><strong>${money(due(p.id))}</strong><span>${pendingCount} не закрыто</span></button></section><section class="object-overview-grid"><div class="card overview-progress-card"><div class="overview-progress-head"><div><small>Ход работ</small><strong>${summary.stages.length ? summary.progress + '%' : 'График не заполнен'}</strong></div><span class="badge ${summary.delay ? 'pending' : summary.stages.length ? 'paid' : 'neutral'}">${esc(delayLabel(summary))}</span></div><div class="progress-track"><div class="progress-fill ${summary.delay ? 'warn' : ''}" style="width:${summary.progress}%"></div></div><div class="overview-progress-labels"><span>${esc(summary.current ? `Сейчас: ${summary.current.name}` : 'Текущий этап не выбран')}</span><span>${esc(summary.next ? `Далее: ${summary.next.name}` : '')}</span></div><button class="btn secondary" data-project-section="schedule" style="margin-top:18px">Открыть график →</button></div><div class="card"><div class="section compact"><h2>Требует внимания</h2><span class="badge ${attention.length ? 'pending' : 'paid'}">${attention.length}</span></div><div class="attention-list">${attention.length ? attention.join('') : '<div class="empty">Сейчас всё спокойно</div>'}</div></div><div class="card"><div class="section compact"><h2>Информация</h2></div><dl class="object-details"><div><dt>Заказчик</dt><dd>${esc(p.client || 'Не указан')}</dd></div><div><dt>Телефон</dt><dd>${esc(p.clientPhone || 'Не указан')}</dd></div><div><dt>Договор</dt><dd>${esc(p.contractNumber || 'Не указан')}</dd></div><div><dt>Плановая сдача</dt><dd>${esc(projectDate(p.plannedEndDate))}</dd></div><div><dt>Гарантия до</dt><dd>${esc(projectDate(p.warrantyUntil))}</dd></div></dl></div></section>${notes}`;
+    const progressLabels = document.querySelector('.overview-progress-labels');
+    if (progressLabels && summary.plannedProgress != null) progressLabels.insertAdjacentHTML('afterbegin', `<span>План: ${summary.plannedProgress}% · Факт: ${summary.progress}%</span>`);
+  }
+
+  function renderProjectSchedule(p) {
+    const summary = scheduleSummary(p.id);
+    const isArchived = p.status === 'archived';
+    $('#projectSection').innerHTML = `<div class="page-title-row"><div><h2>График работ</h2><p>Этапы, сроки и фактическая готовность объекта</p></div>${canManageProjects() && !isArchived ? '<button id="addStage" class="btn primary">+ Этап</button>' : ''}</div><section class="schedule-summary"><div class="card dashboard-metric"><small>Общая готовность</small><strong>${summary.stages.length ? summary.progress + '%' : '—'}</strong><span>${summary.stages.length} этапов</span></div><div class="card dashboard-metric"><small>Текущий этап</small><strong>${esc(summary.current?.name || '—')}</strong><span>${summary.current ? summary.current.progress + '% готово' : 'Не выбран'}</span></div><div class="card dashboard-metric"><small>Следующий этап</small><strong>${esc(summary.next?.name || '—')}</strong><span>${summary.next?.plannedStart ? projectDate(summary.next.plannedStart) : 'Не запланирован'}</span></div><div class="card dashboard-metric ${summary.delay ? 'featured' : ''}"><small>Отклонение</small><strong>${esc(delayLabel(summary))}</strong><span>${summary.delayed.length ? summary.delayed.length + ' этапов требуют внимания' : 'Задержек нет'}</span></div></section><div id="stageList" class="schedule-stage-list"></div>`;
+    const firstMetricNote = document.querySelector('.schedule-summary .dashboard-metric span');
+    if (firstMetricNote && summary.plannedProgress != null) firstMetricNote.textContent = `Плановая готовность ${summary.plannedProgress}% · ${summary.stages.length} этапов`;
+    const list = document.getElementById('stageList');
+    if (!summary.stages.length) list.innerHTML = `<div class="card schedule-empty"><h3>График пока пуст</h3><p class="muted">Добавьте этапы работ — система автоматически рассчитает готовность и задержки.</p>${canManageProjects() && !isArchived ? '<button id="emptyAddStage" class="btn primary">Добавить первый этап</button>' : ''}</div>`;
+    else list.innerHTML = summary.stages.map(stage => `<button class="card stage-card" data-stage-id="${esc(stage.id)}"><div class="stage-card-head"><span class="stage-card-title"><strong>${esc(stage.name)}</strong><span>${esc(stage.comment || 'Без комментария')}</span></span><span class="stage-status ${esc(stage.status)}">${esc(stageStatuses[stage.status] || stage.status)}</span></div><div class="stage-progress-row"><div class="progress-track"><div class="progress-fill ${stage.status === 'delayed' ? 'warn' : ''}" style="width:${stage.progress}%"></div></div><strong>${stage.progress}%</strong></div><div class="stage-card-meta"><div><small>План</small><strong>${esc(stage.plannedStart ? projectDate(stage.plannedStart) : '—')} — ${esc(stage.plannedEnd ? projectDate(stage.plannedEnd) : '—')}</strong></div><div><small>Факт</small><strong>${esc(stage.actualStart ? projectDate(stage.actualStart) : '—')} — ${esc(stage.actualEnd ? projectDate(stage.actualEnd) : '—')}</strong></div><div><small>Стоимость работ</small><strong>${stage.workCost == null ? '—' : money(stage.workCost)}</strong></div></div></button>`).join('');
+    const add = document.getElementById('addStage') || document.getElementById('emptyAddStage'); if (add) add.onclick = () => openStageDialog(p.id);
+    list.querySelectorAll('[data-stage-id]').forEach(button => button.onclick = () => openStageDialog(p.id, button.dataset.stageId));
   }
 
   function renderProjectFinance(p) {
@@ -519,6 +626,39 @@
     $('#projectSection').innerHTML = `<div class="card module-placeholder"><span>Раздел подготовлен</span><h2>${copy[0]}</h2><p class="muted">${copy[1]}</p></div>`;
   }
 
+  function openStageDialog(projectId, stageId = null) {
+    if (!canManageProjects()) return;
+    const stage = stageId ? (state.stages || []).find(item => item.id === stageId && item.projectId === projectId) : null;
+    if (stageId && !stage) return;
+    stageForm.reset();
+    sId.value = stage?.id || '';
+    sName.value = stage?.name || '';
+    sStatus.value = stage?.status || 'planned';
+    sProgress.value = stage?.progress ?? 0;
+    sPlannedStart.value = stage?.plannedStart || '';
+    sPlannedEnd.value = stage?.plannedEnd || '';
+    sActualStart.value = stage?.actualStart || '';
+    sActualEnd.value = stage?.actualEnd || '';
+    sWorkCost.value = stage?.workCost ?? '';
+    sComment.value = stage?.comment || '';
+    deleteStage.hidden = !stage;
+    stageDlg.querySelector('.sheethead h2').textContent = stage ? 'Редактировать этап' : 'Новый этап';
+    stageDlg.dataset.projectId = projectId;
+    stageDlg.showModal();
+  }
+
+  async function removeStage(id) {
+    const stage = (state.stages || []).find(item => item.id === id);
+    if (!stage || !canManageProjects() || !confirm(`Удалить этап «${stage.name}»?`)) return;
+    try {
+      banner('Удаляю этап…');
+      await api('delete_stage', { id });
+      stageDlg.close();
+      await loadCloud();
+      banner('Этап удалён', 'ok');
+    } catch (e) { banner('Не удалось удалить этап: ' + e.message, 'error'); }
+  }
+
   function renderProjectCloud() {
     const p = proj(state.project);
     if (!p) {
@@ -534,7 +674,10 @@
     if (edit) edit.onclick = () => openProjectEditCloud(p.id);
     const archive = document.getElementById('archiveProjectCloud');
     if (archive) archive.onclick = () => setProjectArchivedCloud(p.id, !isArchived);
+    const operation = document.getElementById('objectOperation');
+    if (operation) operation.onclick = () => openExpense(p.id);
     if (projectSection === 'overview') renderProjectOverview(p);
+    else if (projectSection === 'schedule') renderProjectSchedule(p);
     else if (projectSection === 'finance') renderProjectFinance(p);
     else renderProjectPlaceholder(projectSection);
     document.querySelectorAll('[data-project-section]').forEach(button => button.onclick = () => { projectSection = button.dataset.projectSection; render(); });
@@ -625,7 +768,7 @@
       <div class="card"><small class="muted">Ваш доступ</small><strong style="display:block;margin-top:6px">${roleLabel(role)}</strong>${name ? `<div class="muted" style="margin-top:4px">${esc(name)}</div>` : ''}</div>
       ${role === 'owner' ? '<div class="card"><strong>Команда</strong><p class="muted">Новые сотрудники сначала открывают Mini App через @Admafinance_bot. После этого они появятся здесь и будут ждать подтверждения.</p><button id="teamAccess" class="btn primary" style="width:100%">Команда и доступ</button></div>' : ''}
       <div class="card"><strong>Вход в браузере</strong><p class="muted">${currentUser?.web_login ? 'Ваш логин: ' + esc(currentUser.web_login) : 'Настройте логин и пароль для входа без Telegram.'}</p><button id="webCredentials" class="btn secondary">${currentUser?.web_login ? 'Изменить пароль' : 'Настроить вход'}</button>${!initData ? '<button id="webLogout" class="btn danger" style="margin-left:8px">Выйти</button>' : ''}</div>
-      <div class="card"><strong>ADMA Finance</strong><p class="muted">Финансы объектов · облачная версия · v19</p></div>`;
+      <div class="card"><strong>ADMA Finance</strong><p class="muted">Управление объектами и финансами · облачная версия · v21</p></div>`;
     const teamBtn = document.getElementById('teamAccess');
     if (teamBtn) teamBtn.onclick = openTeamAccess;
     document.getElementById('webCredentials').onclick = () => openWebCredentials(currentUser);
@@ -639,6 +782,8 @@
     renderProjects = renderProjectsCloud;
     renderProject = renderProjectCloud;
     renderDue = renderDueCloud;
+    const baseRender = render;
+    render = function() { baseRender(); syncAppChrome(); };
     const originalOpenExpense = openExpense;
     openExpense = function(pid) {
       if (savingExpense) return;
@@ -707,6 +852,36 @@
         await loadCloud();
         banner(wasEditing ? 'Объект обновлён' : 'Объект сохранён в облаке', 'ok');
       } catch (e) { console.error(e); banner('Не удалось сохранить объект: ' + e.message, 'error'); }
+    };
+
+    cancelStage.onclick = () => stageDlg.close();
+    deleteStage.onclick = () => removeStage(sId.value);
+    stageForm.onsubmit = async ev => {
+      ev.preventDefault();
+      if (!cloudReady || !canManageProjects()) return;
+      const projectId = stageDlg.dataset.projectId;
+      const existing = sId.value ? (state.stages || []).find(stage => stage.id === sId.value) : null;
+      const positions = stagesFor(projectId).map(stage => stage.position);
+      const stage = {
+        project_id: projectId,
+        name: sName.value.trim(), status: sStatus.value, progress: Number(sProgress.value || 0),
+        position: existing?.position ?? (positions.length ? Math.max(...positions) + 10 : 0),
+        planned_start: optionalValue(sPlannedStart.value), planned_end: optionalValue(sPlannedEnd.value),
+        actual_start: optionalValue(sActualStart.value), actual_end: optionalValue(sActualEnd.value),
+        work_cost: sWorkCost.value ? Number(sWorkCost.value) : null,
+        comment: optionalValue(sComment.value), responsible_user_id: existing?.responsibleUserId || null,
+      };
+      const controls = [...stageForm.querySelectorAll('input,select,textarea,button')];
+      controls.forEach(control => control.disabled = true);
+      try {
+        banner(existing ? 'Сохраняю этап…' : 'Добавляю этап…');
+        if (existing) await api('update_stage', { stage: { id: existing.id, ...stage } });
+        else await api('create_stage', { stage });
+        stageDlg.close();
+        await loadCloud();
+        banner(existing ? 'Этап обновлён' : 'Этап добавлен', 'ok');
+      } catch (e) { banner('Не удалось сохранить этап: ' + e.message, 'error'); }
+      finally { controls.forEach(control => control.disabled = false); }
     };
 
     expenseForm.onsubmit = async ev => {
@@ -869,6 +1044,7 @@
       currentUser = cloud.current_user;
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
+      state.stages = (cloud.stages || []).map(mapStage);
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();
