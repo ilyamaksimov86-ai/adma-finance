@@ -72,6 +72,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       await route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
     });
     const until = async fn => {for(let i=0;i<100;i++){if(await fn())return;await new Promise(r=>setTimeout(r,30));}throw Error('Timed out');};
+    const switchTab = async name => {const side=page.locator(`[data-side-tab="${name}"]`);if(await side.isVisible())await side.click();else await page.click(`[data-tab="${name}"]`);};
     const submit = () => page.evaluate(()=>expenseForm.requestSubmit());
     const open = async () => {await page.evaluate(()=>openExpense('project-1'));await page.fill('#eAmount','100');};
     const closed = () => until(()=>page.evaluate(()=>!expenseDlg.open && !eAmount.disabled));
@@ -98,8 +99,8 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       {...state.expenses[0],id:'already-reimbursed',reimbursed:true},
       {...state.expenses[0],id:'paid-by-client',paidBy:'client'}
     ));
-    await page.click('[data-tab="due"]');assert.equal(await page.locator('#pdfAllPending').count(),0);
-    await page.click('[data-tab="projects"]');await page.getByRole('button',{name:/Тестовый объект/}).click();
+    await switchTab('due');assert.equal(await page.locator('#pdfAllPending').count(),0);
+    await switchTab('projects');await page.getByRole('button',{name:/Тестовый объект/}).click();
     assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);
     assert.match(await page.locator('#app').innerText(),/86[,.]5 м²/);
     assert.match(await page.locator('#app').innerText(),/Иван Петров/);
@@ -122,12 +123,12 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     await open();await photo();failSave=true;await submit();await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('test_save_failure')));
     const uploadCount=uploads.length;await submit();await closed();assert.equal(uploads.length,uploadCount);assert.equal(expenses.at(-1).receipt_path,'user/receipt-2.jpg');pass('failed save retries without uploading photo again');
     await open();delaySave=true;const count=requests.filter(r=>r.action==='create_expense').length;await page.evaluate(()=>{expenseForm.requestSubmit();expenseForm.requestSubmit();});await closed();assert.equal(requests.filter(r=>r.action==='create_expense').length,count+1);pass('double submit creates one expense');
-    await page.setViewportSize({width:390,height:844});await page.click('[data-tab="projects"]');await page.getByRole('button',{name:/Тестовый объект/}).click();
+    await page.setViewportSize({width:390,height:844});await switchTab('projects');await page.getByRole('button',{name:/Тестовый объект/}).click();
     assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);pass('mobile object card has no page overflow');
     if(web) {
       await page.evaluate(()=>{const s=JSON.parse(localStorage.getItem('adma.web.session'));s.expires_at=0;localStorage.setItem('adma.web.session',JSON.stringify(s));});
       await open();await submit();await closed();assert(requests.some(r=>r.action==='refresh'));pass('expired session refreshes before save');
-      await page.click('[data-tab="more"]');await page.click('#webLogout');await page.locator('#loginForm').waitFor();
+      await switchTab('more');await page.click('#webLogout');await page.locator('#loginForm').waitFor();
       assert.equal(await page.evaluate(()=>localStorage.getItem('adma.web.session')),null);pass('logout hides financial data');
     }
     assert.deepEqual(errors,[]);pass('no uncaught browser errors');
