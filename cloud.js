@@ -1145,6 +1145,8 @@
       const paid = document.getElementById('markPaid');
       const editBtn = document.getElementById('editExpenseBtn');
       const delBtn = document.getElementById('del');
+      const infoCard = document.querySelector('#detail .card');
+      if (infoCard && ex.author) infoCard.insertAdjacentHTML('beforeend', `<p><small class="muted">Автор</small><br>${esc(ex.author)}</p>`);
       const actions = delBtn?.parentElement || editBtn?.parentElement;
       if (actions && delBtn) {
         const topRow = document.createElement('div');
