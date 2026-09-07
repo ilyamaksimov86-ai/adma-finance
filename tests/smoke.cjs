@@ -100,7 +100,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       {...state.expenses[0],id:'paid-by-client',paidBy:'client'}
     ));
     await switchTab('due');assert.equal(await page.locator('#pdfAllPending').count(),0);
-    await switchTab('projects');await page.getByRole('button',{name:/Тестовый объект/}).click();
+    await switchTab('projects');await page.locator('.project-list-card').filter({hasText:'Тестовый объект'}).click();
     assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);
     assert.match(await page.locator('#app').innerText(),/86[,.]5 м²/);
     assert.match(await page.locator('#app').innerText(),/Иван Петров/);
@@ -117,13 +117,13 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     pass('PDF includes only pending expenses of the opened project');
     await page.click('#pdfPickPending');await page.locator('.pdfExpenseCheck').first().uncheck();await page.click('#pdfBuildSelected');await until(()=>pdfs.length===2);assert(pdfs[1].includes('["expense-2"]'));await until(()=>page.evaluate(()=>!document.getElementById('pdfDlg').open));pass('PDF selected');
     await page.click('#pdfPickPending');assert.equal(await page.locator('.pdfExpenseCheck').count(),2);await page.click('#pdfClear');assert.equal(await page.locator('#pdfBuildSelected').isDisabled(),true);await page.click('#closePdf');pass('empty selection cannot export all projects');
-    await page.click('#back');await page.getByRole('button',{name:/Пустой объект/}).click();await page.click('[data-project-section="finance"]');assert.equal(await page.locator('#pdfAllPending').count(),0);pass('empty project does not offer a global PDF');
+    await page.click('#back');await page.locator('.project-list-card').filter({hasText:'Пустой объект'}).click();await page.click('[data-project-section="finance"]');assert.equal(await page.locator('#pdfAllPending').count(),0);pass('empty project does not offer a global PDF');
     await page.evaluate(()=>details('expense-1'));await page.click('#markPaid');await until(()=>expenses[0].reimbursed);await until(()=>page.evaluate(()=>!detailDlg.open));pass('mark reimbursed');
     page.on('dialog',d=>d.accept());await page.evaluate(()=>details('expense-1'));await page.click('#del');await until(()=>expenses.length===1);await until(()=>page.evaluate(()=>!detailDlg.open));pass('delete expense');
     await open();await photo();failSave=true;await submit();await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('test_save_failure')));
     const uploadCount=uploads.length;await submit();await closed();assert.equal(uploads.length,uploadCount);assert.equal(expenses.at(-1).receipt_path,'user/receipt-2.jpg');pass('failed save retries without uploading photo again');
     await open();delaySave=true;const count=requests.filter(r=>r.action==='create_expense').length;await page.evaluate(()=>{expenseForm.requestSubmit();expenseForm.requestSubmit();});await closed();assert.equal(requests.filter(r=>r.action==='create_expense').length,count+1);pass('double submit creates one expense');
-    await page.setViewportSize({width:390,height:844});await switchTab('projects');await page.getByRole('button',{name:/Тестовый объект/}).click();
+    await page.setViewportSize({width:390,height:844});await switchTab('projects');await page.locator('.project-list-card').filter({hasText:'Тестовый объект'}).click();
     assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);pass('mobile object card has no page overflow');
     if(web) {
       await page.evaluate(()=>{const s=JSON.parse(localStorage.getItem('adma.web.session'));s.expires_at=0;localStorage.setItem('adma.web.session',JSON.stringify(s));});
