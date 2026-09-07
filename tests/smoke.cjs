@@ -113,6 +113,8 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     await open();await photo();failSave=true;await submit();await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('test_save_failure')));
     const uploadCount=uploads.length;await submit();await closed();assert.equal(uploads.length,uploadCount);assert.equal(expenses.at(-1).receipt_path,'user/receipt-2.jpg');pass('failed save retries without uploading photo again');
     await open();delaySave=true;const count=requests.filter(r=>r.action==='create_expense').length;await page.evaluate(()=>{expenseForm.requestSubmit();expenseForm.requestSubmit();});await closed();assert.equal(requests.filter(r=>r.action==='create_expense').length,count+1);pass('double submit creates one expense');
+    await page.setViewportSize({width:390,height:844});await page.click('[data-tab="projects"]');await page.getByRole('button',{name:/Тестовый объект/}).click();
+    assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);pass('mobile object card has no page overflow');
     if(web) {
       await page.evaluate(()=>{const s=JSON.parse(localStorage.getItem('adma.web.session'));s.expires_at=0;localStorage.setItem('adma.web.session',JSON.stringify(s));});
       await open();await submit();await closed();assert(requests.some(r=>r.action==='refresh'));pass('expired session refreshes before save');
