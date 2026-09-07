@@ -95,7 +95,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     ));
     await page.click('[data-tab="due"]');assert.equal(await page.locator('#pdfAllPending').count(),0);
     await page.click('[data-tab="projects"]');await page.getByRole('button',{name:/Тестовый объект/}).click();
-    assert.equal(await page.locator('[data-project-section]').count(),9);
+    assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);
     assert.match(await page.locator('#projectView').innerText(),/86[,.]5 м²/);
     assert.match(await page.locator('#projectView').innerText(),/Иван Петров/);
     assert.match(await page.locator('#projectView').innerText(),/График не заполнен/);
