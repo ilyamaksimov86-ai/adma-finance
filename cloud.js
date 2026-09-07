@@ -224,8 +224,8 @@
 
 
   // PDF_EXPORT_V16
-  function pendingExpensesForPdf() {
-    return [...state.expenses].filter(pending).sort((a, b) => {
+  function pendingExpensesForPdf(projectId) {
+    return [...state.expenses].filter(e => pending(e) && e.projectId === projectId).sort((a, b) => {
       const pa = proj(a.projectId)?.name || '';
       const pb = proj(b.projectId)?.name || '';
       return pa.localeCompare(pb, 'ru') || a.date.localeCompare(b.date);
@@ -277,6 +277,11 @@
   }
 
   async function createReimbursementPdf(expenseIds = null) {
+    // An empty selection must never fall back to exporting every project.
+    if (!Array.isArray(expenseIds) || !expenseIds.length) {
+      banner('Нет расходов к компенсации по этому объекту', 'error');
+      return;
+    }
     banner('Формирую PDF…');
     try {
       const data = await requestReimbursementPdfViaXHR(expenseIds);
@@ -303,13 +308,14 @@
     return dlg;
   }
 
-  function openPdfSelection() {
-    const expenses = pendingExpensesForPdf();
+  function openPdfSelection(projectId) {
+    const expenses = pendingExpensesForPdf(projectId);
     if (!expenses.length) {
       banner('Нет расходов к компенсации', 'error');
       return;
     }
     const dlg = ensurePdfDialog();
+    dlg.querySelector('h2').textContent = 'Расходы: ' + (proj(projectId)?.name || 'Объект');
     const list = dlg.querySelector('#pdfSelectionList');
     list.innerHTML = expenses.map(e => {
       const p = proj(e.projectId);
@@ -347,16 +353,7 @@
 
   function renderDueCloud() {
     const arr = state.expenses.filter(pending).sort((a, b) => b.date.localeCompare(a.date));
-    const actions = arr.length ? `<div class="card"><strong>Выгрузка для заказчика</strong><p class="muted" style="margin:6px 0 12px">В PDF попадут только расходы, которые ещё не компенсированы.</p><button id="pdfAllPending" class="btn primary" style="width:100%;margin-bottom:8px">Выгрузить все в PDF · ${arr.length}</button><button id="pdfPickPending" class="btn secondary" style="width:100%">Выбрать расходы</button></div>` : '';
-    $('#app').innerHTML = `<section class="hero"><small>Всего к возмещению</small><div class="amount">${money(due())}</div><small>${arr.length} чеков</small></section>${actions}<div id="list"></div>`;
-    const all = document.getElementById('pdfAllPending');
-    if (all) all.onclick = async () => {
-      all.disabled = true;
-      try { await createReimbursementPdf(null); } catch {}
-      finally { all.disabled = false; }
-    };
-    const pick = document.getElementById('pdfPickPending');
-    if (pick) pick.onclick = openPdfSelection;
+    $('#app').innerHTML = `<section class="hero"><small>Всего к возмещению</small><div class="amount">${money(due())}</div><small>${arr.length} чеков</small></section><p class="muted">PDF для заказчика можно выгрузить в карточке объекта.</p><div id="list"></div>`;
     renderExpenses(arr, $('#list'));
   }
 
@@ -473,6 +470,19 @@
     if (archive) archive.onclick = () => setProjectArchivedCloud(p.id, !isArchived);
     const addExpense = document.getElementById('addExpense');
     if (addExpense) addExpense.onclick = () => openExpense(p.id);
+    const pdfExpenses = pendingExpensesForPdf(p.id);
+    const pdfCard = document.createElement('div');
+    pdfCard.className = 'card';
+    pdfCard.innerHTML = `<strong>PDF для заказчика</strong><p class="muted">Только некомпенсированные расходы по этому объекту.</p>${pdfExpenses.length ? `<button id="pdfAllPending" class="btn primary" style="width:100%;margin-bottom:8px">Выгрузить PDF по объекту · ${pdfExpenses.length}</button><button id="pdfPickPending" class="btn secondary" style="width:100%">Выбрать расходы</button>` : '<p class="muted">Нет расходов к компенсации</p>'}`;
+    $('#list').before(pdfCard);
+    const all = document.getElementById('pdfAllPending');
+    if (all) all.onclick = async () => {
+      all.disabled = true;
+      try { await createReimbursementPdf(pendingExpensesForPdf(p.id).map(e => e.id)); } catch {}
+      finally { all.disabled = false; }
+    };
+    const pick = document.getElementById('pdfPickPending');
+    if (pick) pick.onclick = () => openPdfSelection(p.id);
     renderExpenses(arr, $('#list'));
   }
 
@@ -561,7 +571,7 @@
       <div class="card"><small class="muted">Ваш доступ</small><strong style="display:block;margin-top:6px">${roleLabel(role)}</strong>${name ? `<div class="muted" style="margin-top:4px">${esc(name)}</div>` : ''}</div>
       ${role === 'owner' ? '<div class="card"><strong>Команда</strong><p class="muted">Новые сотрудники сначала открывают Mini App через @Admafinance_bot. После этого они появятся здесь и будут ждать подтверждения.</p><button id="teamAccess" class="btn primary" style="width:100%">Команда и доступ</button></div>' : ''}
       <div class="card"><strong>Вход в браузере</strong><p class="muted">${currentUser?.web_login ? 'Ваш логин: ' + esc(currentUser.web_login) : 'Настройте логин и пароль для входа без Telegram.'}</p><button id="webCredentials" class="btn secondary">${currentUser?.web_login ? 'Изменить пароль' : 'Настроить вход'}</button>${!initData ? '<button id="webLogout" class="btn danger" style="margin-left:8px">Выйти</button>' : ''}</div>
-      <div class="card"><strong>ADMA Finance</strong><p class="muted">Финансы объектов · облачная версия · v18</p></div>`;
+      <div class="card"><strong>ADMA Finance</strong><p class="muted">Финансы объектов · облачная версия · v19</p></div>`;
     const teamBtn = document.getElementById('teamAccess');
     if (teamBtn) teamBtn.onclick = openTeamAccess;
     document.getElementById('webCredentials').onclick = () => openWebCredentials(currentUser);

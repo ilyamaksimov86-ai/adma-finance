@@ -19,7 +19,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     const page = await browser.newPage();
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     const requests = [], uploads = [], pdfs = [];
-    const projects = [{id:'project-1',name:'Тестовый объект',status:'active'}];
+    const projects = [{id:'project-1',name:'Тестовый объект',status:'active'}, {id:'project-2',name:'Другой объект',status:'active'}, {id:'project-3',name:'Пустой объект',status:'active'}];
     let expenses = [], failSave = false, delaySave = false;
     await page.route('https://telegram.org/**', r => r.fulfill({body:''}));
     await page.addInitScript(web => {
@@ -86,8 +86,20 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     await open();await submit();await closed();assert.equal(expenses.length,1);assert.equal(expenses[0].receipt_path,null);pass('create without receipt');
     await open();await photo();await submit();await closed();assert.equal(expenses.length,2);assert.equal(expenses[1].receipt_path,'user/receipt-1.jpg');pass('create with receipt while compression is pending');
     await page.evaluate(()=>editExpense('expense-2'));await page.fill('#eAmount','250');await submit();await closed();assert.equal(expenses[1].amount,250);assert.equal(expenses[1].receipt_path,'user/receipt-1.jpg');pass('edit preserves receipt');
-    await page.click('[data-tab="due"]');await page.click('#pdfAllPending');await until(()=>pdfs.length===1);assert(!pdfs[0].includes('expense_ids'));pass('PDF all pending');
+    await page.evaluate(()=>state.expenses.push(
+      {...state.expenses[0],id:'other-project-expense',projectId:'project-2'},
+      {...state.expenses[0],id:'already-reimbursed',reimbursed:true},
+      {...state.expenses[0],id:'paid-by-client',paidBy:'client'}
+    ));
+    await page.click('[data-tab="due"]');assert.equal(await page.locator('#pdfAllPending').count(),0);
+    await page.click('[data-tab="projects"]');await page.getByRole('button',{name:/Тестовый объект/}).click();
+    await page.click('#pdfAllPending');await until(()=>pdfs.length===1);
+    assert(pdfs[0].includes('["expense-1","expense-2"]'));
+    assert(!pdfs[0].includes('other-project-expense'));assert(!pdfs[0].includes('already-reimbursed'));assert(!pdfs[0].includes('paid-by-client'));
+    pass('PDF includes only pending expenses of the opened project');
     await page.click('#pdfPickPending');await page.locator('.pdfExpenseCheck').first().uncheck();await page.click('#pdfBuildSelected');await until(()=>pdfs.length===2);assert(pdfs[1].includes('["expense-2"]'));await until(()=>page.evaluate(()=>!document.getElementById('pdfDlg').open));pass('PDF selected');
+    await page.click('#pdfPickPending');assert.equal(await page.locator('.pdfExpenseCheck').count(),2);await page.click('#pdfClear');assert.equal(await page.locator('#pdfBuildSelected').isDisabled(),true);await page.click('#closePdf');pass('empty selection cannot export all projects');
+    await page.click('#back');await page.getByRole('button',{name:/Пустой объект/}).click();assert.equal(await page.locator('#pdfAllPending').count(),0);pass('empty project does not offer a global PDF');
     await page.evaluate(()=>details('expense-1'));await page.click('#markPaid');await until(()=>expenses[0].reimbursed);await until(()=>page.evaluate(()=>!detailDlg.open));pass('mark reimbursed');
     page.on('dialog',d=>d.accept());await page.evaluate(()=>details('expense-1'));await page.click('#del');await until(()=>expenses.length===1);await until(()=>page.evaluate(()=>!detailDlg.open));pass('delete expense');
     await open();await photo();failSave=true;await submit();await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('test_save_failure')));
