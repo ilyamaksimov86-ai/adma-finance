@@ -99,7 +99,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     assert.match(await page.locator('#app').innerText(),/86[,.]5 м²/);
     assert.match(await page.locator('#app').innerText(),/Иван Петров/);
     assert.match(await page.locator('#app').innerText(),/График не заполнен/);
-    await page.click('#editProjectCloud');assert.equal(await page.inputValue('#pArea'),'86.5');assert.equal(await page.inputValue('#pContract'),'АДМА-17');await page.click('#cancelProject');
+    await page.click('#editProjectCloud');assert.equal(await page.inputValue('#pArea'),'86.5');assert.equal(await page.inputValue('#pContract'),'АДМА-17');await page.evaluate(()=>projectDlg.close());
     await page.click('[data-project-section="finance"]');
     await page.click('#pdfAllPending');await until(()=>pdfs.length===1);
     assert(pdfs[0].includes('["expense-1","expense-2"]'));
