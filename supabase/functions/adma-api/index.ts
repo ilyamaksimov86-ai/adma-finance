@@ -6,6 +6,21 @@ const cors={"Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"au
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,"Content-Type":"application/json"}});
 function decodeDataUrl(dataUrl:string){const m=dataUrl.match(/^data:(image\/(?:jpeg|png|webp|heic|heif));base64,([A-Za-z0-9+/=]+)$/);if(!m)throw new Error("invalid_receipt_image");const mime=m[1],bin=atob(m[2]);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);if(bytes.byteLength>8*1024*1024)throw new Error("receipt_too_large");const ext=mime==="image/jpeg"?"jpg":mime.split("/")[1];return {mime,bytes,ext}}
 const roles=new Set(["owner","partner","foreman"]);
+const projectStatuses=new Set(["active","preparation","in_progress","paused","handover","warranty","archived"]);
+const isoDate=/^\d{4}-\d{2}-\d{2}$/;
+const optionalText=(value:any,max:number)=>{if(value==null||value==="")return null;const text=String(value).trim();if(!text)return null;if(text.length>max)throw new Error("field_too_long");return text};
+function projectInput(input:any,partial=false){
+  const p=input||{},result:any={};
+  if(!partial||"name" in p){const name=String(p.name||"").trim();if(!name)return {error:"name_required"};if(name.length>160)return {error:"field_too_long"};result.name=name}
+  const textFields:any={address:300,client_name:160,client_phone:40,comment:2000,contract_number:100};
+  for(const [key,max] of Object.entries(textFields))if(!partial||key in p){try{result[key]=optionalText(p[key],Number(max))}catch{return {error:"field_too_long"}}}
+  if(!partial||"area_sqm" in p){if(p.area_sqm==null||p.area_sqm==="")result.area_sqm=null;else{const area=Number(p.area_sqm);if(!Number.isFinite(area)||area<=0||area>10000)return {error:"invalid_area"};result.area_sqm=area}}
+  for(const key of ["start_date","planned_end_date","actual_end_date","warranty_until"])if(!partial||key in p){const value=p[key];if(value!=null&&value!==""&&!isoDate.test(String(value)))return {error:"invalid_date"};result[key]=value||null}
+  if(!partial||"status" in p){const status=String(p.status||"in_progress");if(!projectStatuses.has(status))return {error:"invalid_status"};result.status=status}
+  const start="start_date" in result?result.start_date:p.start_date,planned="planned_end_date" in result?result.planned_end_date:p.planned_end_date;
+  if(start&&planned&&planned<start)return {error:"invalid_project_dates"};
+  return {value:result};
+}
 
 Deno.serve(async req=>{
   if(req.method==="OPTIONS")return new Response("ok",{headers:cors});
@@ -62,10 +77,10 @@ Deno.serve(async req=>{
     }
 
     if(action==="create_project"){
-      if(!privileged)return json({error:"forbidden"},403);const p=body.project||{};if(!String(p.name||"").trim())return json({error:"name_required"},400);const {data,error}=await db.from("projects").insert({name:String(p.name).trim(),address:p.address||null,client_name:p.client_name||null,comment:p.comment||null,status:p.status==="archived"?"archived":"active",created_by:user.id}).select("*").single();if(error)throw error;return json({ok:true,project:data});
+      if(!privileged)return json({error:"forbidden"},403);const parsed=projectInput(body.project);if(parsed.error)return json({error:parsed.error},400);const {data,error}=await db.from("projects").insert({...parsed.value,created_by:user.id}).select("*").single();if(error)throw error;return json({ok:true,project:data});
     }
     if(action==="update_project"){
-      if(!privileged)return json({error:"forbidden"},403);const p=body.project||{};if(!p.id)return json({error:"id_required"},400);const patch:any={updated_at:new Date().toISOString()};for(const k of ["name","address","client_name","comment","status"])if(k in p)patch[k]=p[k];if("name" in patch&&!String(patch.name||"").trim())return json({error:"name_required"},400);if("status" in patch&&!['active','archived'].includes(patch.status))return json({error:"invalid_status"},400);const {data,error}=await db.from("projects").update(patch).eq("id",p.id).select("*").single();if(error)throw error;return json({ok:true,project:data});
+      if(!privileged)return json({error:"forbidden"},403);const p=body.project||{};if(!p.id)return json({error:"id_required"},400);const parsed=projectInput(p,true);if(parsed.error)return json({error:parsed.error},400);const patch:any={...parsed.value,updated_at:new Date().toISOString()};const {data,error}=await db.from("projects").update(patch).eq("id",p.id).select("*").single();if(error)throw error;return json({ok:true,project:data});
     }
     if(action==="create_expense"){
       const e=body.expense||{};if(!e.project_id||!(await canAccessProject(e.project_id)))return json({error:"forbidden"},403);const amount=Number(e.amount||0);if(!Number.isFinite(amount)||amount<=0)return json({error:"amount_must_be_positive"},400);const paidBy=e.paid_by==="client"?"client":"adma";const reimbursementRequired=paidBy==="adma"&&!!e.reimbursement_required;const reimbursed=reimbursementRequired&&!!e.reimbursed;const {data,error}=await db.from("expenses").insert({project_id:e.project_id,amount,expense_date:e.expense_date,category:e.category||"Прочее",supplier:e.supplier||null,paid_by:paidBy,reimbursement_required:reimbursementRequired,reimbursed,reimbursed_at:reimbursed?new Date().toISOString():null,comment:e.comment||null,receipt_path:e.receipt_path||null,created_by:user.id}).select("*").single();if(error)throw error;return json({ok:true,expense:data});

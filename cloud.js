@@ -12,6 +12,20 @@
   let uploadedReceiptPath = null;
   let receiptError = null;
   let savingExpense = false;
+  let projectSection = 'overview';
+  const projectStatuses = {
+    active: 'В работе', preparation: 'Подготовка', in_progress: 'В работе',
+    paused: 'Приостановлен', handover: 'Сдача', warranty: 'Гарантия', archived: 'Архив',
+  };
+  const projectSections = [
+    ['overview', 'Обзор'], ['schedule', 'График'], ['finance', 'Финансы'],
+    ['team', 'Команда'], ['documents', 'Документы'], ['tasks', 'Задачи'], ['photos', 'Фото'],
+  ];
+
+  const optionalValue = value => String(value || '').trim() || null;
+  const projectStatusLabel = status => projectStatuses[status] || projectStatuses.active;
+  const projectStatusClass = status => ['paused'].includes(status) ? 'pending' : ['archived'].includes(status) ? 'neutral' : 'paid';
+  const projectDate = value => value ? fmt(value) : 'Не указана';
 
   function clearSelectedReceipt() {
     receiptGeneration++;
@@ -111,6 +125,13 @@
       client: p.client_name || '',
       comment: p.comment || '',
       status: p.status || 'active',
+      area: p.area_sqm == null ? null : Number(p.area_sqm),
+      clientPhone: p.client_phone || '',
+      startDate: p.start_date || '',
+      plannedEndDate: p.planned_end_date || '',
+      actualEndDate: p.actual_end_date || '',
+      contractNumber: p.contract_number || '',
+      warrantyUntil: p.warranty_until || '',
     };
   }
 
@@ -377,6 +398,7 @@
     if (!canManageProjects()) return;
     editingProjectId = null;
     projectForm.reset();
+    pStatus.value = 'preparation';
     const title = projectDlg.querySelector('.sheethead h2');
     if (title) title.textContent = 'Новый объект';
     projectDlg.showModal();
@@ -392,6 +414,14 @@
     pAddress.value = p.address || '';
     pClient.value = p.client || '';
     pComment.value = p.comment || '';
+    pStatus.value = p.status === 'active' ? 'in_progress' : p.status;
+    pArea.value = p.area ?? '';
+    pClientPhone.value = p.clientPhone || '';
+    pStartDate.value = p.startDate || '';
+    pPlannedEndDate.value = p.plannedEndDate || '';
+    pActualEndDate.value = p.actualEndDate || '';
+    pContract.value = p.contractNumber || '';
+    pWarrantyUntil.value = p.warrantyUntil || '';
     const title = projectDlg.querySelector('.sheethead h2');
     if (title) title.textContent = 'Редактировать объект';
     projectDlg.showModal();
@@ -404,7 +434,7 @@
     if (archived && !confirm(`Перенести «${p.name}» в архив? Расходы и чеки сохранятся.`)) return;
     try {
       banner(archived ? 'Переношу объект в архив…' : 'Возвращаю объект в работу…');
-      await api('update_project', { project: { id, status: archived ? 'archived' : 'active' } });
+      await api('update_project', { project: { id, status: archived ? 'archived' : 'in_progress' } });
       if (state.project === id) state.project = null;
       state.tab = 'projects';
       showArchivedProjects = archived;
@@ -428,7 +458,7 @@
     const archived = archivedProjects();
     const list = showArchivedProjects ? archived : active;
     const heading = showArchivedProjects ? 'Архив' : 'Активные объекты';
-    $('#app').innerHTML = `<div class="section"><h2>${heading}</h2>${!showArchivedProjects && canManageProjects() ? '<button id="addProject" class="btn primary">+ Объект</button>' : ''}</div>${showArchivedProjects ? '<button id="showActive" class="btn secondary" style="width:100%;margin-bottom:12px">‹ Активные объекты</button>' : (archived.length ? `<button id="showArchive" class="btn secondary" style="width:100%;margin-bottom:12px">Архив · ${archived.length}</button>` : '')}<div id="plist"></div>`;
+    $('#app').innerHTML = `<div class="section"><div><h2>${heading}</h2><div class="muted project-list-subtitle">Карточки объектов и их текущее состояние</div></div>${!showArchivedProjects && canManageProjects() ? '<button id="addProject" class="btn primary">+ Объект</button>' : ''}</div>${showArchivedProjects ? '<button id="showActive" class="btn secondary project-list-toggle">‹ Активные объекты</button>' : (archived.length ? `<button id="showArchive" class="btn secondary project-list-toggle">Архив · ${archived.length}</button>` : '')}<div id="plist" class="project-list-grid"></div>`;
     const add = document.getElementById('addProject');
     if (add) add.onclick = openProjectCreateCloud;
     const archiveBtn = document.getElementById('showArchive');
@@ -442,12 +472,51 @@
     }
     list.forEach(p => {
       const b = document.createElement('button');
-      b.className = 'card row';
-      b.style.width = '100%';
-      b.innerHTML = `<div class="grow"><div class="row" style="justify-content:flex-start"><strong>${esc(p.name)}</strong>${p.status === 'archived' ? '<span class="badge" style="background:#eee;color:#666">Архив</span>' : ''}</div><div class="muted">${expensesFor(p.id).length} расходов · ${money(spent(p.id))}</div></div><div class="right"><strong>${money(due(p.id))}</strong><div class="muted">к оплате</div></div>`;
-      b.onclick = () => { state.project = p.id; render(); };
+      b.className = 'card project-list-card';
+      const meta = [p.address, p.area ? `${p.area} м²` : ''].filter(Boolean).join(' · ');
+      b.innerHTML = `<div class="row project-card-title"><strong>${esc(p.name)}</strong><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted project-card-address">${esc(meta || 'Адрес и площадь не указаны')}</div><div class="project-card-data"><div><small class="muted">Заказчик</small><strong>${esc(p.client || 'Не указан')}</strong></div><div><small class="muted">Плановая сдача</small><strong>${esc(projectDate(p.plannedEndDate))}</strong></div><div><small class="muted">Текущий этап</small><strong>График не заполнен</strong></div><div><small class="muted">К компенсации</small><strong>${money(due(p.id))}</strong></div></div><div class="project-card-footer"><span>${expensesFor(p.id).length} расходов · ${money(spent(p.id))}</span><strong>Открыть объект ›</strong></div>`;
+      b.onclick = () => { state.project = p.id; projectSection = 'overview'; render(); };
       l.appendChild(b);
     });
+  }
+
+  function projectHeader(p) {
+    const meta = [p.area ? `${p.area} м²` : '', p.client ? `Заказчик: ${p.client}` : ''].filter(Boolean).join(' · ');
+    return `<button id="back" class="btn secondary">‹ Объекты</button><section class="card object-head"><div class="row"><div class="grow"><div class="row object-title-row"><h2>${esc(p.name)}</h2><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted">${esc(p.address || 'Адрес не указан')}</div><div class="muted object-meta">${esc(meta || 'Данные объекта ещё не заполнены')}</div></div>${canManageProjects() ? `<div class="object-actions"><button id="editProjectCloud" class="btn secondary">Редактировать</button><button id="archiveProjectCloud" class="btn ${p.status === 'archived' ? 'primary' : 'danger'}">${p.status === 'archived' ? 'Вернуть в работу' : 'В архив'}</button></div>` : ''}</div><div class="object-schedule"><div><small>Готовность</small><strong>—</strong></div><div><small>Текущий этап</small><strong>График не заполнен</strong></div><div><small>Начало</small><strong>${esc(projectDate(p.startDate))}</strong></div><div><small>Плановая сдача</small><strong>${esc(projectDate(p.plannedEndDate))}</strong></div></div></section><nav class="project-tabs" aria-label="Разделы объекта">${projectSections.map(([id, label]) => `<button class="project-tab ${projectSection === id ? 'active' : ''}" data-project-section="${id}">${label}</button>`).join('')}</nav><div id="projectSection"></div>`;
+  }
+
+  function renderProjectOverview(p) {
+    const notes = p.comment ? `<div class="card"><strong>Примечания</strong><p>${esc(p.comment)}</p></div>` : '';
+    $('#projectSection').innerHTML = `<section class="project-summary-grid"><button class="card project-summary-card" data-project-section="finance"><small>Чеки / Разное</small><strong>${money(spent(p.id))}</strong><span>${expensesFor(p.id).length} записей</span></button><button class="card project-summary-card" data-project-section="finance"><small>К компенсации</small><strong>${money(due(p.id))}</strong><span>${state.expenses.filter(e => e.projectId === p.id && pending(e)).length} не закрыто</span></button><div class="card project-summary-card disabled-summary"><small>Акты</small><strong>Следующий этап</strong><span>Будут подключены в финансах</span></div><div class="card project-summary-card disabled-summary"><small>Накладные</small><strong>Следующий этап</strong><span>Будут подключены в финансах</span></div></section><section class="object-overview-grid"><div class="card"><div class="section compact"><h2>Ход работ</h2><span class="badge neutral">График не настроен</span></div><p class="muted">На следующем этапе здесь появятся этапы, готовность и отклонение от плана.</p><button class="btn secondary" data-project-section="schedule">Открыть график</button></div><div class="card"><div class="section compact"><h2>Информация</h2></div><dl class="object-details"><div><dt>Заказчик</dt><dd>${esc(p.client || 'Не указан')}</dd></div><div><dt>Телефон</dt><dd>${esc(p.clientPhone || 'Не указан')}</dd></div><div><dt>Договор</dt><dd>${esc(p.contractNumber || 'Не указан')}</dd></div><div><dt>Фактическая сдача</dt><dd>${esc(projectDate(p.actualEndDate))}</dd></div><div><dt>Гарантия до</dt><dd>${esc(projectDate(p.warrantyUntil))}</dd></div></dl></div></section>${notes}`;
+  }
+
+  function renderProjectFinance(p) {
+    const arr = [...expensesFor(p.id)].sort((a, b) => b.date.localeCompare(a.date));
+    const isArchived = p.status === 'archived';
+    $('#projectSection').innerHTML = `<section class="hero"><small>К возмещению по объекту</small><div class="amount">${money(due(p.id))}</div><small>Чеки / Разное</small></section><section class="grid"><div class="card metric"><small>Всего расходов</small><strong>${money(spent(p.id))}</strong></div><div class="card metric"><small>Компенсировано</small><strong>${money(reimb(p.id))}</strong></div></section><div id="projectFinanceActions"></div><div class="section"><h2>Чеки / Разное</h2>${!isArchived ? '<button id="addExpense" class="btn primary">+ Расход</button>' : ''}</div><div id="list"></div>`;
+    const pdfExpenses = pendingExpensesForPdf(p.id);
+    const pdfCard = document.createElement('div');
+    pdfCard.className = 'card';
+    pdfCard.innerHTML = `<strong>PDF для заказчика</strong><p class="muted">Только некомпенсированные расходы по этому объекту.</p>${pdfExpenses.length ? `<button id="pdfAllPending" class="btn primary full-button">Выгрузить PDF по объекту · ${pdfExpenses.length}</button><button id="pdfPickPending" class="btn secondary full-button">Выбрать расходы</button>` : '<p class="muted">Нет расходов к компенсации</p>'}`;
+    $('#projectFinanceActions').appendChild(pdfCard);
+    const addExpense = document.getElementById('addExpense');
+    if (addExpense) addExpense.onclick = () => openExpense(p.id);
+    const all = document.getElementById('pdfAllPending');
+    if (all) all.onclick = async () => { all.disabled = true; try { await createReimbursementPdf(pendingExpensesForPdf(p.id).map(e => e.id)); } catch {} finally { all.disabled = false; } };
+    const pick = document.getElementById('pdfPickPending');
+    if (pick) pick.onclick = () => openPdfSelection(p.id);
+    renderExpenses(arr, $('#list'));
+  }
+
+  function renderProjectPlaceholder(section) {
+    const copy = {
+      schedule: ['График работ', 'Этапы, сроки, готовность и отклонения добавим на этапе 3.'],
+      team: ['Команда объекта', 'Прораб, дизайнер и мастера появятся на этапе 5.'],
+      documents: ['Документы', 'Договоры, сметы и технические файлы появятся на этапе 6.'],
+      tasks: ['Задачи', 'Операционные задачи объекта появятся на этапе 6.'],
+      photos: ['Фото объекта', 'Фотографии по этапам появятся на этапе 6.'],
+    }[section];
+    $('#projectSection').innerHTML = `<div class="card module-placeholder"><span>Раздел подготовлен</span><h2>${copy[0]}</h2><p class="muted">${copy[1]}</p></div>`;
   }
 
   function renderProjectCloud() {
@@ -458,32 +527,17 @@
       render();
       return;
     }
-    const arr = [...expensesFor(p.id)].sort((a, b) => b.date.localeCompare(a.date));
     const isArchived = p.status === 'archived';
-    const manage = canManageProjects();
-    const info = [p.address, p.client].filter(Boolean).join(' · ');
-    $('#app').innerHTML = `<button id="back" class="btn secondary">‹ Назад</button>${isArchived ? '<span class="badge" style="margin-left:8px;background:#eee;color:#666">Архив</span>' : ''}<section class="hero" style="margin-top:12px"><small>К возмещению по объекту</small><div class="amount">${money(due(p.id))}</div><small>${esc(info)}</small></section><section class="grid"><div class="card metric"><small>Всего расходов</small><strong>${money(spent(p.id))}</strong></div><div class="card metric"><small>Компенсировано</small><strong>${money(reimb(p.id))}</strong></div></section>${(p.client || p.address || p.comment) ? `<div class="card"><strong>Об объекте</strong>${p.client ? `<p class="muted" style="margin-bottom:4px">Заказчик: ${esc(p.client)}</p>` : ''}${p.address ? `<p class="muted" style="margin:4px 0">Адрес: ${esc(p.address)}</p>` : ''}${p.comment ? `<p style="margin:10px 0 0">${esc(p.comment)}</p>` : ''}</div>` : ''}${manage ? `<div class="row" style="margin:12px 0"><button id="editProjectCloud" class="btn secondary grow">Редактировать</button><button id="archiveProjectCloud" class="btn ${isArchived ? 'primary' : 'danger'} grow">${isArchived ? 'Вернуть в работу' : 'В архив'}</button></div>` : ''}<div class="section"><h2>Расходы</h2>${!isArchived ? '<button id="addExpense" class="btn primary">+ Расход</button>' : ''}</div><div id="list"></div>`;
+    $('#app').innerHTML = projectHeader(p);
     $('#back').onclick = () => { state.project = null; state.tab = 'projects'; showArchivedProjects = isArchived; render(); };
     const edit = document.getElementById('editProjectCloud');
     if (edit) edit.onclick = () => openProjectEditCloud(p.id);
     const archive = document.getElementById('archiveProjectCloud');
     if (archive) archive.onclick = () => setProjectArchivedCloud(p.id, !isArchived);
-    const addExpense = document.getElementById('addExpense');
-    if (addExpense) addExpense.onclick = () => openExpense(p.id);
-    const pdfExpenses = pendingExpensesForPdf(p.id);
-    const pdfCard = document.createElement('div');
-    pdfCard.className = 'card';
-    pdfCard.innerHTML = `<strong>PDF для заказчика</strong><p class="muted">Только некомпенсированные расходы по этому объекту.</p>${pdfExpenses.length ? `<button id="pdfAllPending" class="btn primary" style="width:100%;margin-bottom:8px">Выгрузить PDF по объекту · ${pdfExpenses.length}</button><button id="pdfPickPending" class="btn secondary" style="width:100%">Выбрать расходы</button>` : '<p class="muted">Нет расходов к компенсации</p>'}`;
-    $('#list').before(pdfCard);
-    const all = document.getElementById('pdfAllPending');
-    if (all) all.onclick = async () => {
-      all.disabled = true;
-      try { await createReimbursementPdf(pendingExpensesForPdf(p.id).map(e => e.id)); } catch {}
-      finally { all.disabled = false; }
-    };
-    const pick = document.getElementById('pdfPickPending');
-    if (pick) pick.onclick = () => openPdfSelection(p.id);
-    renderExpenses(arr, $('#list'));
+    if (projectSection === 'overview') renderProjectOverview(p);
+    else if (projectSection === 'finance') renderProjectFinance(p);
+    else renderProjectPlaceholder(projectSection);
+    document.querySelectorAll('[data-project-section]').forEach(button => button.onclick = () => { projectSection = button.dataset.projectSection; render(); });
   }
 
   // TEAM_ACCESS_V13
@@ -635,6 +689,14 @@
         const project = {
           name: pName.value.trim(), address: pAddress.value.trim() || null,
           client_name: pClient.value.trim() || null, comment: pComment.value.trim() || null,
+          status: pStatus.value,
+          area_sqm: pArea.value ? Number(pArea.value) : null,
+          client_phone: optionalValue(pClientPhone.value),
+          start_date: optionalValue(pStartDate.value),
+          planned_end_date: optionalValue(pPlannedEndDate.value),
+          actual_end_date: optionalValue(pActualEndDate.value),
+          contract_number: optionalValue(pContract.value),
+          warranty_until: optionalValue(pWarrantyUntil.value),
         };
         banner(editingProjectId ? 'Сохраняю изменения объекта…' : 'Сохраняю объект…');
         if (editingProjectId) await api('update_project', { project: { id: editingProjectId, ...project } });

@@ -11,6 +11,12 @@ function handler(name,db,actor) {
   {env:{get:()=> 'test-config'},serve:h=>serve=h},()=>db,actor ? async()=>actor : requireUser,credentialsFromForm,AuthError);
  return serve;
 }
+function projectParser() {
+ const source=readFileSync(new URL('../supabase/functions/adma-api/index.ts',import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
+ const js=stripTypeScriptTypes(source);
+ return new Function('Deno','createClient','requireUser','AuthError',`${js}\nreturn projectInput;`)(
+  {env:{get:()=> 'test-config'},serve(){}},()=>({}),async()=>actor,AuthError);
+}
 const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(body)});
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
@@ -44,4 +50,18 @@ test('receipt upload checks web identity before touching storage',async()=>{
  const db={auth:{getUser:async()=>({error:Error('forged')})},storage:{from:()=>{touched=true;}}};
  const form=new FormData();form.append('accessToken','forged');form.append('file',new File(['test'],'receipt.jpg',{type:'image/jpeg'}));
  const r=await handler('receipt-upload',db)(new Request('https://test.invalid',{method:'POST',body:form}));assert.equal(r.status,401);assert.equal(touched,false);
+});
+test('project metadata is normalized and validated',()=>{
+ const parse=projectParser();
+ const valid=parse({name:'  Новый объект  ',status:'preparation',area_sqm:'86.5',client_name:' Заказчик ',start_date:'2026-09-10',planned_end_date:'2027-01-20'});
+ assert.deepEqual(valid.value,{name:'Новый объект',address:null,client_name:'Заказчик',client_phone:null,comment:null,contract_number:null,area_sqm:86.5,start_date:'2026-09-10',planned_end_date:'2027-01-20',actual_end_date:null,warranty_until:null,status:'preparation'});
+ assert.equal(parse({name:'Объект',area_sqm:0}).error,'invalid_area');
+ assert.equal(parse({name:'Объект',status:'unknown'}).error,'invalid_status');
+ assert.equal(parse({name:'Объект',start_date:'2026-10-01',planned_end_date:'2026-09-01'}).error,'invalid_project_dates');
+ assert.equal(parse({name:'Объект',comment:'x'.repeat(2001)}).error,'field_too_long');
+});
+test('foreman cannot create or edit an object',async()=>{
+ const create=await handler('adma-api',{},actor)(request({action:'create_project',project:{name:'Запрещено'}}));
+ const update=await handler('adma-api',{},actor)(request({action:'update_project',project:{id:'project-1',name:'Запрещено'}}));
+ assert.equal(create.status,403);assert.equal(update.status,403);
 });

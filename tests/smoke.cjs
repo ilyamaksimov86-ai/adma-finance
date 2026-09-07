@@ -19,7 +19,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     const page = await browser.newPage();
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     const requests = [], uploads = [], pdfs = [];
-    const projects = [{id:'project-1',name:'Тестовый объект',status:'active'}, {id:'project-2',name:'Другой объект',status:'active'}, {id:'project-3',name:'Пустой объект',status:'active'}];
+    const projects = [{id:'project-1',name:'Тестовый объект',status:'in_progress',address:'Москва, ул. Тестовая, 1',area_sqm:86.5,client_name:'Иван Петров',client_phone:'+7 900 000-00-00',start_date:'2026-09-01',planned_end_date:'2027-02-15',contract_number:'АДМА-17'}, {id:'project-2',name:'Другой объект',status:'active'}, {id:'project-3',name:'Пустой объект',status:'preparation'}];
     let expenses = [], failSave = false, delaySave = false;
     await page.route('https://telegram.org/**', r => r.fulfill({body:''}));
     await page.addInitScript(web => {
@@ -54,6 +54,8 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
           else data={ok:true,session:{access_token:'test-token',refresh_token:'test-refresh',expires_at:Math.floor(Date.now()/1000)+3600}};
         }
         else if(body.action==='load') data={ok:true,projects,expenses,current_user:{id:'user',role:'owner',is_active:true,web_login:web?'ilya':null}};
+        else if(body.action==='create_project') {const p={...body.project,id:'project-'+(projects.length+1)};projects.push(p);data.project=p;}
+        else if(body.action==='update_project') {const p=projects.find(p=>p.id===body.project.id);Object.assign(p,body.project);data.project=p;}
         else if(body.action==='create_expense') {
           if(delaySave) await new Promise(r=>setTimeout(r,200));
           if(failSave) {status=500; data={error:'test_save_failure'};failSave=false;}
@@ -93,13 +95,19 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     ));
     await page.click('[data-tab="due"]');assert.equal(await page.locator('#pdfAllPending').count(),0);
     await page.click('[data-tab="projects"]');await page.getByRole('button',{name:/Тестовый объект/}).click();
+    assert.equal(await page.locator('[data-project-section]').count(),9);
+    assert.match(await page.locator('#projectView').innerText(),/86[,.]5 м²/);
+    assert.match(await page.locator('#projectView').innerText(),/Иван Петров/);
+    assert.match(await page.locator('#projectView').innerText(),/График не заполнен/);
+    await page.click('#editProjectCloud');assert.equal(await page.inputValue('#pArea'),'86.5');assert.equal(await page.inputValue('#pContract'),'АДМА-17');await page.click('#cancelProject');
+    await page.click('[data-project-section="finance"]');
     await page.click('#pdfAllPending');await until(()=>pdfs.length===1);
     assert(pdfs[0].includes('["expense-1","expense-2"]'));
     assert(!pdfs[0].includes('other-project-expense'));assert(!pdfs[0].includes('already-reimbursed'));assert(!pdfs[0].includes('paid-by-client'));
     pass('PDF includes only pending expenses of the opened project');
     await page.click('#pdfPickPending');await page.locator('.pdfExpenseCheck').first().uncheck();await page.click('#pdfBuildSelected');await until(()=>pdfs.length===2);assert(pdfs[1].includes('["expense-2"]'));await until(()=>page.evaluate(()=>!document.getElementById('pdfDlg').open));pass('PDF selected');
     await page.click('#pdfPickPending');assert.equal(await page.locator('.pdfExpenseCheck').count(),2);await page.click('#pdfClear');assert.equal(await page.locator('#pdfBuildSelected').isDisabled(),true);await page.click('#closePdf');pass('empty selection cannot export all projects');
-    await page.click('#back');await page.getByRole('button',{name:/Пустой объект/}).click();assert.equal(await page.locator('#pdfAllPending').count(),0);pass('empty project does not offer a global PDF');
+    await page.click('#back');await page.getByRole('button',{name:/Пустой объект/}).click();await page.click('[data-project-section="finance"]');assert.equal(await page.locator('#pdfAllPending').count(),0);pass('empty project does not offer a global PDF');
     await page.evaluate(()=>details('expense-1'));await page.click('#markPaid');await until(()=>expenses[0].reimbursed);await until(()=>page.evaluate(()=>!detailDlg.open));pass('mark reimbursed');
     page.on('dialog',d=>d.accept());await page.evaluate(()=>details('expense-1'));await page.click('#del');await until(()=>expenses.length===1);await until(()=>page.evaluate(()=>!detailDlg.open));pass('delete expense');
     await open();await photo();failSave=true;await submit();await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('test_save_failure')));
