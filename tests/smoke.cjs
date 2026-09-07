@@ -20,6 +20,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     const requests = [], uploads = [], pdfs = [];
     const projects = [{id:'project-1',name:'Тестовый объект',status:'in_progress',address:'Москва, ул. Тестовая, 1',area_sqm:86.5,client_name:'Иван Петров',client_phone:'+7 900 000-00-00',start_date:'2026-09-01',planned_end_date:'2027-02-15',contract_number:'АДМА-17'}, {id:'project-2',name:'Другой объект',status:'active'}, {id:'project-3',name:'Пустой объект',status:'preparation'}];
+    let stages = [{id:'stage-1',project_id:'project-1',name:'Подготовка',position:0,progress:100,status:'completed',planned_start:'2026-08-20',planned_end:'2026-08-31',actual_start:'2026-08-20',actual_end:'2026-08-30',work_cost:50000},{id:'stage-2',project_id:'project-1',name:'Электрика',position:10,progress:40,status:'delayed',planned_start:'2026-09-01',planned_end:'2026-09-05',actual_start:'2026-09-02',comment:'Черновой монтаж'}];
     let expenses = [], failSave = false, delaySave = false;
     await page.route('https://telegram.org/**', r => r.fulfill({body:''}));
     await page.addInitScript(web => {
@@ -53,9 +54,12 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
           else if(body.action==='logout') data={ok:true};
           else data={ok:true,session:{access_token:'test-token',refresh_token:'test-refresh',expires_at:Math.floor(Date.now()/1000)+3600}};
         }
-        else if(body.action==='load') data={ok:true,projects,expenses,current_user:{id:'user',role:'owner',is_active:true,web_login:web?'ilya':null}};
+        else if(body.action==='load') data={ok:true,projects,expenses,stages,current_user:{id:'user',role:'owner',is_active:true,web_login:web?'ilya':null}};
         else if(body.action==='create_project') {const p={...body.project,id:'project-'+(projects.length+1)};projects.push(p);data.project=p;}
         else if(body.action==='update_project') {const p=projects.find(p=>p.id===body.project.id);Object.assign(p,body.project);data.project=p;}
+        else if(body.action==='create_stage') {const s={...body.stage,id:'stage-'+(stages.length+1),created_at:new Date().toISOString()};stages.push(s);data.stage=s;}
+        else if(body.action==='update_stage') {const s=stages.find(s=>s.id===body.stage.id);Object.assign(s,body.stage);data.stage=s;}
+        else if(body.action==='delete_stage') stages=stages.filter(s=>s.id!==body.id);
         else if(body.action==='create_expense') {
           if(delaySave) await new Promise(r=>setTimeout(r,200));
           if(failSave) {status=500; data={error:'test_save_failure'};failSave=false;}
@@ -85,6 +89,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       await page.fill('#webPassword','test-password-123');await page.click('#loginForm button');
     }
     await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('Облако подключено')));pass('application loads');
+    assert.equal(await page.locator('.sidebar').isVisible(),true);assert.match(await page.locator('#app').innerText(),/Требует внимания/);assert.match(await page.locator('.brand').innerText(),/ADMA/);pass('desktop dashboard matches the shared workspace shell');
     await open();await submit();await closed();assert.equal(expenses.length,1);assert.equal(expenses[0].receipt_path,null);pass('create without receipt');
     await open();await photo();await submit();await closed();assert.equal(expenses.length,2);assert.equal(expenses[1].receipt_path,'user/receipt-1.jpg');pass('create with receipt while compression is pending');
     await page.evaluate(()=>editExpense('expense-2'));await page.fill('#eAmount','250');await submit();await closed();assert.equal(expenses[1].amount,250);assert.equal(expenses[1].receipt_path,'user/receipt-1.jpg');pass('edit preserves receipt');
@@ -98,8 +103,12 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);
     assert.match(await page.locator('#app').innerText(),/86[,.]5 м²/);
     assert.match(await page.locator('#app').innerText(),/Иван Петров/);
-    assert.match(await page.locator('#app').innerText(),/График не заполнен/);
+    assert.match(await page.locator('#app').innerText(),/Электрика/);
     await page.click('#editProjectCloud');assert.equal(await page.inputValue('#pArea'),'86.5');assert.equal(await page.inputValue('#pContract'),'АДМА-17');await page.evaluate(()=>projectDlg.close());
+    await page.click('[data-project-section="schedule"]');assert.equal(await page.locator('[data-stage-id]').count(),2);assert.match(await page.locator('#app').innerText(),/70%/);
+    await page.click('#addStage');await page.fill('#sName','Чистовые работы');await page.fill('#sProgress','0');await page.fill('#sPlannedStart','2026-09-21');await page.fill('#sPlannedEnd','2026-10-15');await page.evaluate(()=>stageForm.requestSubmit());await until(()=>page.evaluate(()=>!stageDlg.open));assert.equal(stages.length,3);
+    await page.locator('[data-stage-id="stage-3"]').click();await page.fill('#sProgress','25');await page.selectOption('#sStatus','in_progress');await page.evaluate(()=>stageForm.requestSubmit());await until(()=>page.evaluate(()=>!stageDlg.open));assert.equal(stages[2].progress,25);assert.equal(stages[2].status,'in_progress');
+    await page.locator('[data-stage-id="stage-3"]').click();page.once('dialog',d=>d.accept());await page.click('#deleteStage');await until(()=>stages.length===2);await until(()=>page.evaluate(()=>!stageDlg.open));pass('create, edit and delete schedule stage');
     await page.click('[data-project-section="finance"]');
     await page.click('#pdfAllPending');await until(()=>pdfs.length===1);
     assert(pdfs[0].includes('["expense-1","expense-2"]'));

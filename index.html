@@ -9,11 +9,30 @@
   <meta name="theme-color" content="#f6f6f8">
   <title>ADMA Finance</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="styles.css?v=20">
+  <link rel="stylesheet" href="styles.css?v=21">
 </head>
 <body data-locked="loading">
-  <header><b>ADMA</b><h1 id="title">Финансы</h1></header>
-  <main id="app" class="content"></main>
+  <header class="topbar">
+    <div class="brand"><strong>ADMA</strong><span>FINANCE</span></div>
+    <span class="workspace-badge">Рабочее пространство</span>
+    <h1 id="title">Главная</h1>
+    <div class="header-user"><span id="headerName">ADMA</span><span id="headerAvatar">A</span></div>
+  </header>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+      <nav class="side-nav">
+        <button class="side-tab active" data-side-tab="home"><span>⌂</span><b>Главная</b></button>
+        <button class="side-tab" data-side-tab="projects"><span>▦</span><b>Объекты</b><em id="sideProjectCount">0</em></button>
+        <button class="side-tab" data-side-tab="due"><span>₽</span><b>К компенсации</b></button>
+        <button class="side-tab" data-side-tab="more"><span>•••</span><b>Ещё</b></button>
+      </nav>
+      <div class="sidebar-label projects-label">АКТИВНЫЕ ОБЪЕКТЫ</div>
+      <div id="sideProjects" class="side-projects"></div>
+      <div class="sidebar-footer"><strong>Финансы под контролем</strong><span>От объекта до последнего платежа</span></div>
+    </aside>
+    <main id="app" class="content"></main>
+  </div>
   <button id="fab" class="fab">＋</button>
   <nav class="tabs">
     <button class="tab active" data-tab="home"><span>⌂</span><small>Главная</small></button>
@@ -49,9 +68,22 @@
       <img id="preview" class="receipt" style="display:none">
     </form>
   </dialog>
+  <dialog id="stageDlg">
+    <form id="stageForm">
+      <input id="sId" type="hidden">
+      <div class="sheethead"><button id="cancelStage" type="button">Отмена</button><h2>Новый этап</h2><button class="btn primary">Сохранить</button></div>
+      <label>Название этапа<input id="sName" required maxlength="160" placeholder="Электрика"></label>
+      <div class="grid"><label>Статус<select id="sStatus"><option value="planned">Запланирован</option><option value="in_progress">В работе</option><option value="completed">Выполнен</option><option value="delayed">Задерживается</option><option value="paused">Приостановлен</option></select></label><label>Готовность, %<input id="sProgress" type="number" inputmode="numeric" min="0" max="100" step="1" value="0" required></label></div>
+      <div class="grid"><label>Плановое начало<input id="sPlannedStart" type="date"></label><label>Плановое окончание<input id="sPlannedEnd" type="date"></label></div>
+      <div class="grid"><label>Фактическое начало<input id="sActualStart" type="date"></label><label>Фактическое окончание<input id="sActualEnd" type="date"></label></div>
+      <label>Стоимость работ, ₽<input id="sWorkCost" type="number" inputmode="decimal" min="0" step="0.01"></label>
+      <label>Комментарий<textarea id="sComment" rows="3" maxlength="2000"></textarea></label>
+      <button id="deleteStage" class="btn danger full-button" type="button" hidden>Удалить этап</button>
+    </form>
+  </dialog>
   <dialog id="detailDlg"><div id="detail" class="dialog-body"></div></dialog>
-  <script src="auth.js?v=20"></script>
-  <script src="app.js?v=20"></script>
-  <script src="cloud.js?v=20"></script>
+  <script src="auth.js?v=21"></script>
+  <script src="app.js?v=21"></script>
+  <script src="cloud.js?v=21"></script>
 </body>
 </html>
