@@ -131,6 +131,10 @@
     return post('adma-api', { ...await AdmaAuth.credentials(), action, ...extra });
   }
 
+  async function financeApi(action, extra = {}) {
+    return post('finance-api', { ...await AdmaAuth.credentials(), action, ...extra });
+  }
+
   function mapProject(p) {
     return {
       id: p.id,
@@ -174,7 +178,26 @@
       comment: e.comment || '',
       receipt: e.receipt_url || null,
       receiptPath: e.receipt_path || null,
+      author: e.author ? ([e.author.first_name,e.author.last_name].filter(Boolean).join(' ') || e.author.web_login || e.author.telegram_username || 'ADMA') : 'ADMA',
     };
+  }
+
+  const numeric = value => Number(value || 0);
+  const mapAct = a => ({...a, projectId:a.project_id, stageId:a.stage_id||'', date:a.act_date, amount:numeric(a.amount), filePath:a.file_path||'', fileUrl:a.file_url||''});
+  const mapActCost = x => ({...x, actId:x.act_id, date:x.cost_date, amount:numeric(x.amount)});
+  const mapActPayment = x => ({...x, actId:x.act_id, date:x.payment_date, amount:numeric(x.amount)});
+  const mapWaybill = w => ({...w, projectId:w.project_id, date:w.waybill_date, amount:numeric(w.amount), filePath:w.file_path||'', fileUrl:w.file_url||''});
+  const mapWaybillPayment = x => ({...x, waybillId:x.waybill_id, date:x.payment_date, amount:numeric(x.amount)});
+  const mapCompanyExpense = x => ({...x, date:x.expense_date, amount:numeric(x.amount), filePath:x.file_path||'', fileUrl:x.file_url||'', authorName:x.author?([x.author.first_name,x.author.last_name].filter(Boolean).join(' ')||x.author.web_login||x.author.telegram_username||'ADMA'):'ADMA'});
+
+  async function loadFinanceCloud() {
+    if (!canManageProjects()) {
+      state.acts=[];state.actCosts=[];state.actPayments=[];state.waybills=[];state.waybillPayments=[];state.companyExpenses=[];
+      return;
+    }
+    const data=await financeApi('load');
+    state.acts=(data.acts||[]).map(mapAct);state.actCosts=(data.act_costs||[]).map(mapActCost);state.actPayments=(data.act_payments||[]).map(mapActPayment);
+    state.waybills=(data.waybills||[]).map(mapWaybill);state.waybillPayments=(data.waybill_payments||[]).map(mapWaybillPayment);state.companyExpenses=(data.company_expenses||[]).map(mapCompanyExpense);
   }
 
   async function loadCloud() {
@@ -182,6 +205,7 @@
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
+    await loadFinanceCloud();
     save();
     render();
     return data;
@@ -410,6 +434,29 @@
 
   function canManageProjects() {
     return currentUser?.role === 'owner' || currentUser?.role === 'partner';
+  }
+
+  const actsFor = projectId => (state.acts || []).filter(x => x.projectId === projectId);
+  const waybillsFor = projectId => (state.waybills || []).filter(x => x.projectId === projectId);
+  const actCostsFor = actId => (state.actCosts || []).filter(x => x.actId === actId);
+  const actPaymentsFor = actId => (state.actPayments || []).filter(x => x.actId === actId);
+  const waybillPaymentsFor = waybillId => (state.waybillPayments || []).filter(x => x.waybillId === waybillId);
+  const totalAmounts = items => items.reduce((total, item) => total + numeric(item.amount), 0);
+  const actCost = actId => totalAmounts(actCostsFor(actId));
+  const actPaid = actId => totalAmounts(actPaymentsFor(actId));
+  const actProfit = act => numeric(act.amount) - actCost(act.id);
+  const waybillPaid = waybillId => totalAmounts(waybillPaymentsFor(waybillId));
+  const waybillProfit = waybill => numeric(waybill.amount) - waybillPaid(waybill.id);
+  function projectFinanceTotals(projectId) {
+    const acts=actsFor(projectId),waybills=waybillsFor(projectId);
+    const actsAmount=totalAmounts(acts),actsProfit=acts.reduce((s,x)=>s+actProfit(x),0);
+    const waybillsAmount=totalAmounts(waybills),waybillsProfit=waybills.reduce((s,x)=>s+waybillProfit(x),0);
+    return {actsAmount,actsProfit,waybillsAmount,waybillsProfit,checks:spent(projectId),due:due(projectId),profit:actsProfit+waybillsProfit};
+  }
+  function companyFinanceTotals() {
+    const objectProfit=(state.projects||[]).reduce((s,p)=>s+projectFinanceTotals(p.id).profit,0);
+    const general=totalAmounts(state.companyExpenses||[]);
+    return {objectProfit,general,due:due(),profit:objectProfit-general};
   }
 
   function activeProjects() {
@@ -645,9 +692,15 @@
     const notes = p.comment ? `<div class="card"><strong>Примечания</strong><p>${esc(p.comment)}</p></div>` : '';
     const attention = summary.delayed.map(stage => `<button class="attention-item" data-project-section="schedule"><span class="attention-icon">!</span><span class="grow"><strong>${esc(stage.name)} задерживается</strong><span>${esc(stage.plannedEnd ? `Плановое окончание ${projectDate(stage.plannedEnd)}` : 'Проверьте статус этапа')}</span></span></button>`);
     const pendingCount = state.expenses.filter(e => e.projectId === p.id && pending(e)).length;
+    const finance = projectFinanceTotals(p.id);
     if (pendingCount) attention.push(`<button class="attention-item" data-project-section="finance"><span class="attention-icon">₽</span><span class="grow"><strong>К компенсации ${money(due(p.id))}</strong><span>${pendingCount} незакрытых расходов</span></span></button>`);
     $('#projectSection').innerHTML = `<section class="project-summary-grid"><div class="card project-summary-card disabled-summary"><small>Акты</small><strong>—</strong><span>Подключим на этапе 4</span></div><div class="card project-summary-card disabled-summary"><small>Накладные</small><strong>—</strong><span>Подключим на этапе 4</span></div><button class="card project-summary-card" data-project-section="finance"><small>Чеки / Разное</small><strong>${money(spent(p.id))}</strong><span>${expensesFor(p.id).length} записей</span></button><button class="card project-summary-card featured" data-project-section="finance"><small>К компенсации</small><strong>${money(due(p.id))}</strong><span>${pendingCount} не закрыто</span></button></section><section class="object-overview-grid"><div class="card overview-progress-card"><div class="overview-progress-head"><div><small>Ход работ</small><strong>${summary.stages.length ? summary.progress + '%' : 'График не заполнен'}</strong></div><span class="badge ${summary.delay ? 'pending' : summary.stages.length ? 'paid' : 'neutral'}">${esc(delayLabel(summary))}</span></div><div class="progress-track"><div class="progress-fill ${summary.delay ? 'warn' : ''}" style="width:${summary.progress}%"></div></div><div class="overview-progress-labels"><span>${esc(summary.current ? `Сейчас: ${summary.current.name}` : 'Текущий этап не выбран')}</span><span>${esc(summary.next ? `Далее: ${summary.next.name}` : '')}</span></div><button class="btn secondary" data-project-section="schedule" style="margin-top:18px">Открыть график →</button></div><div class="card"><div class="section compact"><h2>Требует внимания</h2><span class="badge ${attention.length ? 'pending' : 'paid'}">${attention.length}</span></div><div class="attention-list">${attention.length ? attention.join('') : '<div class="empty">Сейчас всё спокойно</div>'}</div></div><div class="card"><div class="section compact"><h2>Информация</h2></div><dl class="object-details"><div><dt>Заказчик</dt><dd>${esc(p.client || 'Не указан')}</dd></div><div><dt>Телефон</dt><dd>${esc(p.clientPhone || 'Не указан')}</dd></div><div><dt>Договор</dt><dd>${esc(p.contractNumber || 'Не указан')}</dd></div><div><dt>Плановая сдача</dt><dd>${esc(projectDate(p.plannedEndDate))}</dd></div><div><dt>Гарантия до</dt><dd>${esc(projectDate(p.warrantyUntil))}</dd></div></dl></div></section>${notes}`;
     const progressLabels = document.querySelector('.overview-progress-labels');
+    if (canManageProjects()) {
+      const summaryCards = document.querySelectorAll('.project-summary-card');
+      if (summaryCards[0]) { summaryCards[0].classList.remove('disabled-summary'); summaryCards[0].querySelector('strong').textContent=money(finance.actsAmount); summaryCards[0].querySelector('span').textContent=`Прибыль ${money(finance.actsProfit)}`; }
+      if (summaryCards[1]) { summaryCards[1].classList.remove('disabled-summary'); summaryCards[1].querySelector('strong').textContent=money(finance.waybillsAmount); summaryCards[1].querySelector('span').textContent=`Прибыль ${money(finance.waybillsProfit)}`; }
+    }
     if (progressLabels && summary.plannedProgress != null) progressLabels.insertAdjacentHTML('afterbegin', `<span>План: ${summary.plannedProgress}% · Факт: ${summary.progress}%</span>`);
   }
 
@@ -664,6 +717,47 @@
     list.querySelectorAll('[data-stage-id]').forEach(button => button.onclick = () => openStageDialog(p.id, button.dataset.stageId));
   }
 
+  const actStatusLabels={draft:'Черновик',issued:'Выставлен',signed:'Подписан',partially_paid:'Частично оплачен',paid:'Оплачен'};
+  const waybillStatusLabels={created:'Создана',sent:'Отправлена',partially_paid:'Частично оплачена',paid:'Оплачена',closed:'Закрыта'};
+  const companyCategoryLabels={advertising:'Реклама',services:'Сервисы / подписки',office:'Офис',transport:'Транспорт',administrative:'Административные',salaries:'Зарплаты',taxes:'Налоги',banking:'Банковские расходы',other:'Прочее'};
+  const statusBadge = status => ['paid','closed'].includes(status)?'paid':['partially_paid','issued','sent'].includes(status)?'pending':'neutral';
+  const fileLink = item => item.fileUrl ? `<a class="btn secondary" href="${esc(item.fileUrl)}" target="_blank" rel="noopener">Открыть файл</a>` : '';
+  const financeEmpty = text => `<div class="card empty">${esc(text)}</div>`;
+
+  async function uploadFinanceFile(file,entity){
+    if(!file)return null;const credentials=await AdmaAuth.credentials();
+    return new Promise((resolve,reject)=>{const form=new FormData();for(const [key,value] of Object.entries(credentials))form.append(key,value);form.append('entity',entity);form.append('file',file,file.name);const xhr=new XMLHttpRequest();xhr.open('POST',SUPABASE_FUNCTIONS+'/finance-file-upload',true);xhr.timeout=45000;xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch{};if(xhr.status>=200&&xhr.status<300&&data.path)return resolve(data.path);reject(new Error(data.error||`HTTP_${xhr.status}`))};xhr.onerror=()=>reject(new Error('Ошибка загрузки файла'));xhr.ontimeout=()=>reject(new Error('Загрузка файла заняла слишком много времени'));xhr.send(form)});
+  }
+  function dynamicDialog(id,title,body){let dlg=document.getElementById(id);if(!dlg){dlg=document.createElement('dialog');dlg.id=id;document.body.appendChild(dlg)}dlg.innerHTML=`<form class="finance-form"><div class="sheethead"><button type="button" data-close>Отмена</button><h2>${esc(title)}</h2><button class="btn primary">Сохранить</button></div>${body}</form>`;dlg.querySelector('[data-close]').onclick=()=>dlg.close();return dlg}
+  async function refreshFinance(message){await loadFinanceCloud();render();banner(message,'ok')}
+
+  function openActDialog(projectId,actId=''){
+    const act=(state.acts||[]).find(x=>x.id===actId);const stages=stagesFor(projectId);
+    const dlg=dynamicDialog('actDlg',act?'Редактировать акт':'Новый акт',`<div class="grid"><label>Номер<input name="number" required maxlength="100" value="${esc(act?.number||'')}"></label><label>Дата<input name="date" type="date" required value="${esc(act?.date||new Date().toISOString().slice(0,10))}"></label></div><label>Название / описание<input name="title" required maxlength="300" value="${esc(act?.title||'')}"></label><div class="grid"><label>Этап<select name="stage"><option value="">Без этапа</option>${stages.map(s=>`<option value="${esc(s.id)}" ${act?.stageId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Сумма акта, ₽<input name="amount" type="number" min="0" step="0.01" required value="${act?.amount??''}"></label></div><label>Статус<select name="status">${Object.entries(actStatusLabels).map(([value,label])=>`<option value="${value}" ${act?.status===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(act||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(act?.comment||'')}</textarea></label>${act?'<button type="button" class="btn danger full-button" data-delete>Удалить акт</button>':''}`);
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=act?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'act');await financeApi('save_act',{act:{id:act?.id,project_id:projectId,stage_id:form.elements.stage.value||null,number:form.elements.number.value,act_date:form.elements.date.value,title:form.elements.title.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});dlg.close();await refreshFinance(act?'Акт обновлён':'Акт добавлен')}catch(e){banner('Не удалось сохранить акт: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить акт №${act.number}?`))return;try{await financeApi('delete_act',{id:act.id});dlg.close();await refreshFinance('Акт удалён')}catch(e){banner('Не удалось удалить акт: '+e.message,'error')}};dlg.showModal();
+  }
+  function openWaybillDialog(projectId,waybillId=''){
+    const item=(state.waybills||[]).find(x=>x.id===waybillId);const dlg=dynamicDialog('waybillDlg',item?'Редактировать накладную':'Новая накладная',`<div class="grid"><label>Номер<input name="number" required maxlength="100" value="${esc(item?.number||'')}"></label><label>Дата<input name="date" type="date" required value="${esc(item?.date||new Date().toISOString().slice(0,10))}"></label></div><label>Поставщик<input name="supplier" required maxlength="200" value="${esc(item?.supplier||'')}"></label><label>Описание<textarea name="description" rows="2" maxlength="2000">${esc(item?.description||'')}</textarea></label><div class="grid"><label>Сумма накладной, ₽<input name="amount" type="number" min="0" step="0.01" required value="${item?.amount??''}"></label><label>Статус<select name="status">${Object.entries(waybillStatusLabels).map(([value,label])=>`<option value="${value}" ${item?.status===value?'selected':''}>${label}</option>`).join('')}</select></label></div><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(item||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(item?.comment||'')}</textarea></label>${item?'<button type="button" class="btn danger full-button" data-delete>Удалить накладную</button>':''}`);
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'waybill');await financeApi('save_waybill',{waybill:{id:item?.id,project_id:projectId,number:form.elements.number.value,waybill_date:form.elements.date.value,supplier:form.elements.supplier.value,description:form.elements.description.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});dlg.close();await refreshFinance(item?'Накладная обновлена':'Накладная добавлена')}catch(e){banner('Не удалось сохранить накладную: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить накладную №${item.number}?`))return;try{await financeApi('delete_waybill',{id:item.id});dlg.close();await refreshFinance('Накладная удалена')}catch(e){banner('Не удалось удалить накладную: '+e.message,'error')}};dlg.showModal();
+  }
+  function openFinanceLineDialog(kind,parentId){
+    const definitions={act_cost:['Выплата / расход по акту','add_act_cost','act_id'],act_payment:['Оплата заказчика','add_act_payment','act_id'],waybill_payment:['Оплата поставщику','add_waybill_payment','waybill_id']};const [title,action,key]=definitions[kind];
+    const dlg=dynamicDialog('financeLineDlg',title,`<div class="grid"><label>Дата<input name="date" type="date" required value="${new Date().toISOString().slice(0,10)}"></label><label>Сумма, ₽<input name="amount" type="number" min="0.01" step="0.01" required></label></div><label>Комментарий<textarea name="comment" rows="3" maxlength="1000"></textarea></label>`);
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{await financeApi(action,{[key]:parentId,date:form.elements.date.value,amount:Number(form.elements.amount.value),comment:form.elements.comment.value});dlg.close();await refreshFinance('Операция добавлена')}catch(e){banner('Не удалось добавить операцию: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal();
+  }
+  async function deleteFinanceLine(action,id){if(!confirm('Удалить эту операцию?'))return;try{await financeApi(action,{id});await refreshFinance('Операция удалена')}catch(e){banner('Не удалось удалить операцию: '+e.message,'error')}}
+
+  function renderActs(projectId,content,isArchived){
+    const acts=actsFor(projectId);content.innerHTML=`<div class="section"><div><h2>Акты</h2><p class="muted">Прибыль = сумма акта − выплаты мастерам и связанные расходы</p></div>${!isArchived?'<button id="addAct" class="btn primary">+ Акт</button>':''}</div><div class="finance-list">${acts.length?acts.map(a=>{const costs=actCostsFor(a.id),payments=actPaymentsFor(a.id);return `<article class="card finance-record"><div class="finance-record-head"><div><span class="badge ${statusBadge(a.status)}">${esc(actStatusLabels[a.status]||a.status)}</span><h3>Акт №${esc(a.number)} · ${esc(a.title)}</h3><p class="muted">${fmt(a.date)}${a.stageId?' · '+esc((state.stages||[]).find(s=>s.id===a.stageId)?.name||'Этап'):''}</p></div><button class="btn secondary" data-edit-act="${esc(a.id)}">Редактировать</button></div><div class="finance-values"><div><small>Сумма</small><strong>${money(a.amount)}</strong></div><div><small>Оплачено заказчиком</small><strong>${money(actPaid(a.id))}</strong></div><div><small>Выплаты / расходы</small><strong>${money(actCost(a.id))}</strong></div><div class="profit"><small>Прибыль</small><strong>${money(actProfit(a))}</strong></div></div><div class="finance-actions"><button class="btn secondary" data-act-payment="${esc(a.id)}">+ Оплата заказчика</button><button class="btn secondary" data-act-cost="${esc(a.id)}">+ Выплата / расход</button>${fileLink(a)}</div>${payments.length||costs.length?`<div class="finance-lines">${payments.map(x=>`<div><span>Оплата заказчика · ${fmt(x.date)}</span><strong>${money(x.amount)}</strong><button data-delete-act-payment="${esc(x.id)}">×</button></div>`).join('')}${costs.map(x=>`<div><span>Выплата / расход · ${fmt(x.date)}${x.description?' · '+esc(x.description):''}</span><strong>− ${money(x.amount)}</strong><button data-delete-act-cost="${esc(x.id)}">×</button></div>`).join('')}</div>`:''}</article>`}).join(''):financeEmpty('Актов по этому объекту пока нет')}</div>`;
+    const add=content.querySelector('#addAct');if(add)add.onclick=()=>openActDialog(projectId);content.querySelectorAll('[data-edit-act]').forEach(b=>b.onclick=()=>openActDialog(projectId,b.dataset.editAct));content.querySelectorAll('[data-act-payment]').forEach(b=>b.onclick=()=>openFinanceLineDialog('act_payment',b.dataset.actPayment));content.querySelectorAll('[data-act-cost]').forEach(b=>b.onclick=()=>openFinanceLineDialog('act_cost',b.dataset.actCost));content.querySelectorAll('[data-delete-act-payment]').forEach(b=>b.onclick=()=>deleteFinanceLine('delete_act_payment',b.dataset.deleteActPayment));content.querySelectorAll('[data-delete-act-cost]').forEach(b=>b.onclick=()=>deleteFinanceLine('delete_act_cost',b.dataset.deleteActCost));
+  }
+  function renderWaybills(projectId,content,isArchived){
+    const items=waybillsFor(projectId);content.innerHTML=`<div class="section"><div><h2>Накладные</h2><p class="muted">Прибыль = сумма накладной − оплаты поставщику и доставки</p></div>${!isArchived?'<button id="addWaybill" class="btn primary">+ Накладная</button>':''}</div><div class="finance-list">${items.length?items.map(w=>{const paid=waybillPaid(w.id),remaining=Math.max(0,w.amount-paid),payments=waybillPaymentsFor(w.id);return `<article class="card finance-record"><div class="finance-record-head"><div><span class="badge ${statusBadge(w.status)}">${esc(waybillStatusLabels[w.status]||w.status)}</span><h3>Накладная №${esc(w.number)} · ${esc(w.supplier)}</h3><p class="muted">${fmt(w.date)}${w.description?' · '+esc(w.description):''}</p></div><button class="btn secondary" data-edit-waybill="${esc(w.id)}">Редактировать</button></div><div class="finance-values"><div><small>Сумма</small><strong>${money(w.amount)}</strong></div><div><small>Оплачено</small><strong>${money(paid)}</strong></div><div><small>Остаток</small><strong>${money(remaining)}</strong></div><div class="profit"><small>Прибыль</small><strong>${money(waybillProfit(w))}</strong></div></div><div class="finance-actions"><button class="btn secondary" data-waybill-payment="${esc(w.id)}">+ Оплата поставщику</button>${fileLink(w)}</div>${payments.length?`<div class="finance-lines">${payments.map(x=>`<div><span>${fmt(x.date)}${x.comment?' · '+esc(x.comment):''}</span><strong>− ${money(x.amount)}</strong><button data-delete-waybill-payment="${esc(x.id)}">×</button></div>`).join('')}</div>`:''}</article>`}).join(''):financeEmpty('Накладных по этому объекту пока нет')}</div>`;
+    const add=content.querySelector('#addWaybill');if(add)add.onclick=()=>openWaybillDialog(projectId);content.querySelectorAll('[data-edit-waybill]').forEach(b=>b.onclick=()=>openWaybillDialog(projectId,b.dataset.editWaybill));content.querySelectorAll('[data-waybill-payment]').forEach(b=>b.onclick=()=>openFinanceLineDialog('waybill_payment',b.dataset.waybillPayment));content.querySelectorAll('[data-delete-waybill-payment]').forEach(b=>b.onclick=()=>deleteFinanceLine('delete_waybill_payment',b.dataset.deleteWaybillPayment));
+  }
+
   function renderProjectFinance(p) {
     const arr = [...expensesFor(p.id)].sort((a, b) => b.date.localeCompare(a.date));
     const isArchived = p.status === 'archived';
@@ -671,19 +765,20 @@
     document.querySelectorAll('[data-project-finance-section]').forEach(button => button.onclick = () => { projectFinanceSection = button.dataset.projectFinanceSection; render(); });
     const content = document.getElementById('projectFinanceContent');
     if (projectFinanceSection === 'summary') {
-      content.innerHTML = `<section class="project-summary-grid"><div class="card project-summary-card disabled-summary"><small>Акты</small><strong>—</strong><span>Данные появятся на этапе 4</span></div><div class="card project-summary-card disabled-summary"><small>Накладные</small><strong>—</strong><span>Данные появятся на этапе 4</span></div><button class="card project-summary-card" data-finance-open="checks"><small>Чеки / Разное</small><strong>${money(spent(p.id))}</strong><span>${arr.length} записей</span></button><button class="card project-summary-card featured" data-finance-open="checks"><small>К компенсации</small><strong>${money(due(p.id))}</strong><span>${arr.filter(pending).length} не закрыто</span></button></section>${moduleScreen('₽', 'Финансы объекта', 'Сводка готова к подключению актов и накладных на следующем этапе.', 'Акты + Накладные + Чеки / Разное → Объект')}`;
+      if(!canManageProjects()){content.innerHTML=`<section class="project-summary-grid"><button class="card project-summary-card" data-finance-open="checks"><small>Чеки / Разное</small><strong>${money(spent(p.id))}</strong><span>${arr.length} записей</span></button><button class="card project-summary-card featured" data-finance-open="checks"><small>К компенсации</small><strong>${money(due(p.id))}</strong><span>${arr.filter(pending).length} не закрыто</span></button></section><div class="card"><strong>Финансовая прибыль доступна владельцу и партнёру</strong><p class="muted">Прораб видит чеки и расходы назначенного объекта.</p></div>`}
+      else{const t=projectFinanceTotals(p.id);content.innerHTML=`<section class="dashboard-metrics finance-summary"><button class="card dashboard-metric" data-finance-open="acts"><small>Сумма актов</small><strong>${money(t.actsAmount)}</strong><span>Прибыль ${money(t.actsProfit)}</span></button><button class="card dashboard-metric" data-finance-open="waybills"><small>Сумма накладных</small><strong>${money(t.waybillsAmount)}</strong><span>Прибыль ${money(t.waybillsProfit)}</span></button><button class="card dashboard-metric" data-finance-open="checks"><small>Чеки / Разное</small><strong>${money(t.checks)}</strong><span>К возмещению ${money(t.due)}</span></button><div class="card dashboard-metric featured"><small>Итоговая прибыль объекта</small><strong>${money(t.profit)}</strong><span>Чеки / Разное не вычитаются</span></div></section><section class="card finance-formula"><strong>Расчёт прибыли</strong><p>Прибыль актов ${money(t.actsProfit)} + прибыль накладных ${money(t.waybillsProfit)} = <b>${money(t.profit)}</b></p><p class="muted">К возмещению от заказчика показывается отдельно: ${money(t.due)}</p></section>`}
       content.querySelectorAll('[data-finance-open]').forEach(button => button.onclick = () => { projectFinanceSection = button.dataset.financeOpen; render(); });
       return;
     }
     if (projectFinanceSection === 'acts') {
-      content.innerHTML = moduleScreen('А', 'Акты', 'Структура экрана подготовлена. Суммы, оплаты и прибыль будут реализованы на этапе 4.', 'Акт → Объект / Этап / Оплаты');
+      if(!canManageProjects())content.innerHTML=financeEmpty('Акты и прибыль доступны владельцу и партнёру');else renderActs(p.id,content,isArchived);
       return;
     }
     if (projectFinanceSection === 'waybills') {
-      content.innerHTML = moduleScreen('Н', 'Накладные', 'Структура экрана подготовлена. Поставщики, оплаты и остатки будут реализованы на этапе 4.', 'Накладная → Объект / Оплаты');
+      if(!canManageProjects())content.innerHTML=financeEmpty('Накладные и прибыль доступны владельцу и партнёру');else renderWaybills(p.id,content,isArchived);
       return;
     }
-    content.innerHTML = `<section class="hero finance-hero"><small>К возмещению по объекту</small><div class="amount">${money(due(p.id))}</div><small>Чеки / Разное не уменьшают прибыль объекта</small></section><section class="grid"><div class="card metric"><small>Всего чеков / разного</small><strong>${money(spent(p.id))}</strong></div><div class="card metric"><small>Компенсировано</small><strong>${money(reimb(p.id))}</strong></div></section><div id="projectFinanceActions"></div><div class="section"><h2>Чеки / Разное</h2>${!isArchived ? '<button id="addExpense" class="btn primary">+ Расход</button>' : ''}</div><div id="list"></div>`;
+    content.innerHTML = `<section class="hero finance-hero"><small>К возмещению по объекту</small><div class="amount">${money(due(p.id))}</div><small>Чеки / Разное не уменьшают прибыль объекта</small></section><section class="grid"><div class="card metric"><small>Всего чеков / разного</small><strong>${money(spent(p.id))}</strong></div><div class="card metric"><small>Компенсировано</small><strong>${money(reimb(p.id))}</strong></div></section><div id="projectFinanceActions"></div><div class="section"><div><h2>Чеки / Разное</h2><p class="muted">Отдельный реестр денег к возврату от заказчика</p></div>${!isArchived ? '<button id="addExpense" class="btn primary">+ Расход</button>' : ''}</div><div class="card finance-filters"><label>С даты<input id="checkFrom" type="date"></label><label>По дату<input id="checkTo" type="date"></label><label>Категория<select id="checkCategory"><option value="">Все категории</option>${[...new Set(arr.map(x=>x.category))].map(x=>`<option>${esc(x)}</option>`).join('')}</select></label><strong id="checkFilteredTotal"></strong></div><div id="list"></div>`;
     const pdfExpenses = pendingExpensesForPdf(p.id);
     const pdfCard = document.createElement('div');
     pdfCard.className = 'card';
@@ -695,7 +790,8 @@
     if (all) all.onclick = async () => { all.disabled = true; try { await createReimbursementPdf(pendingExpensesForPdf(p.id).map(e => e.id)); } catch {} finally { all.disabled = false; } };
     const pick = document.getElementById('pdfPickPending');
     if (pick) pick.onclick = () => openPdfSelection(p.id);
-    renderExpenses(arr, $('#list'));
+    const renderFilteredChecks=()=>{const from=document.getElementById('checkFrom').value,to=document.getElementById('checkTo').value,category=document.getElementById('checkCategory').value;const filtered=arr.filter(x=>(!from||x.date>=from)&&(!to||x.date<=to)&&(!category||x.category===category));document.getElementById('checkFilteredTotal').textContent=`Итого: ${money(totalAmounts(filtered))}`;const list=$('#list');list.innerHTML='';renderExpenses(filtered,list)};
+    ['checkFrom','checkTo','checkCategory'].forEach(id=>document.getElementById(id).onchange=renderFilteredChecks);renderFilteredChecks();
   }
 
   function renderProjectPlaceholder(section) {
@@ -844,17 +940,30 @@
     }
   }
 
+  function openCompanyExpenseDialog(expenseId=''){
+    const item=(state.companyExpenses||[]).find(x=>x.id===expenseId);const dlg=dynamicDialog('companyExpenseDlg',item?'Редактировать общий расход':'Новый общий расход',`<div class="grid"><label>Дата<input name="date" type="date" required value="${esc(item?.date||new Date().toISOString().slice(0,10))}"></label><label>Сумма, ₽<input name="amount" type="number" min="0.01" step="0.01" required value="${item?.amount??''}"></label></div><label>Категория<select name="category">${Object.entries(companyCategoryLabels).map(([value,label])=>`<option value="${value}" ${item?.category===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Описание<input name="description" required maxlength="1000" value="${esc(item?.description||'')}"></label><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(item||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(item?.comment||'')}</textarea></label>${item?'<button type="button" class="btn danger full-button" data-delete>Удалить общий расход</button>':''}`);
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'company-expense');await financeApi('save_company_expense',{expense:{id:item?.id,expense_date:form.elements.date.value,amount:Number(form.elements.amount.value),category:form.elements.category.value,description:form.elements.description.value,comment:form.elements.comment.value,file_path:filePath}});dlg.close();await refreshFinance(item?'Общий расход обновлён':'Общий расход добавлен')}catch(e){banner('Не удалось сохранить расход: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm('Удалить общий расход?'))return;try{await financeApi('delete_company_expense',{id:item.id});dlg.close();await refreshFinance('Общий расход удалён')}catch(e){banner('Не удалось удалить расход: '+e.message,'error')}};dlg.showModal();
+  }
+  function renderCompanyExpenses(content){
+    const items=[...(state.companyExpenses||[])].sort((a,b)=>b.date.localeCompare(a.date));content.innerHTML=`<div class="section"><div><h2>Общие расходы ADMA</h2><p class="muted">Не связаны с объектами и уменьшают только прибыль компании</p></div><button id="addCompanyExpense" class="btn primary">+ Расход</button></div><div class="card finance-filters"><label>С даты<input id="generalFrom" type="date"></label><label>По дату<input id="generalTo" type="date"></label><label>Категория<select id="generalCategory"><option value="">Все категории</option>${Object.entries(companyCategoryLabels).map(([value,label])=>`<option value="${value}">${label}</option>`).join('')}</select></label><strong id="generalTotal"></strong></div><div id="generalList" class="finance-list"></div>`;
+    const draw=()=>{const from=content.querySelector('#generalFrom').value,to=content.querySelector('#generalTo').value,category=content.querySelector('#generalCategory').value;const filtered=items.filter(x=>(!from||x.date>=from)&&(!to||x.date<=to)&&(!category||x.category===category));content.querySelector('#generalTotal').textContent=`Итого: ${money(totalAmounts(filtered))}`;content.querySelector('#generalList').innerHTML=filtered.length?filtered.map(x=>`<button class="card finance-record compact-record" data-company-expense="${esc(x.id)}"><span><strong>${esc(x.description)}</strong><small>${fmt(x.date)} · ${esc(companyCategoryLabels[x.category]||x.category)} · ${esc(x.authorName)}</small></span><strong>${money(x.amount)}</strong></button>`).join(''):financeEmpty('За выбранный период расходов нет')};
+    content.querySelector('#addCompanyExpense').onclick=()=>openCompanyExpenseDialog();['generalFrom','generalTo','generalCategory'].forEach(id=>content.querySelector('#'+id).onchange=draw);draw();content.querySelector('#generalList').onclick=e=>{const row=e.target.closest('[data-company-expense]');if(row)openCompanyExpenseDialog(row.dataset.companyExpense)};
+  }
+
   function renderGlobalFinanceCloud() {
     const pendingExpenses = state.expenses.filter(pending).sort((a, b) => b.date.localeCompare(a.date));
     const projects = activeProjects();
     $('#app').innerHTML = `${pageHeader('ADMA · ФИНАНСЫ', 'Финансы', 'Агрегированная картина компании без дублирования финансов объектов')}${sectionTabs([['summary', 'Сводка'], ['general', 'Общие расходы']], globalFinanceSection, 'data-global-finance-section')}<div id="globalFinanceContent"></div>`;
     document.querySelectorAll('[data-global-finance-section]').forEach(button => button.onclick = () => { globalFinanceSection = button.dataset.globalFinanceSection; render(); });
     const content = document.getElementById('globalFinanceContent');
+    if(!canManageProjects()){content.innerHTML=financeEmpty('Финансовая сводка ADMA доступна владельцу и партнёру');return}
     if (globalFinanceSection === 'general') {
-      content.innerHTML = moduleScreen('₽', 'Общие расходы', 'Экран и маршрут подготовлены. Учёт расходов компании вне объектов будет реализован отдельным функциональным этапом.', 'Общие расходы → ADMA, без обязательной связи с объектом');
+      renderCompanyExpenses(content);
       return;
     }
-    content.innerHTML = `<section class="dashboard-metrics"><div class="card dashboard-metric disabled-summary"><small>Прибыль объектов</small><strong>—</strong><span>После подключения актов и накладных</span></div><div class="card dashboard-metric disabled-summary"><small>Общие расходы</small><strong>—</strong><span>Модуль пока не ведёт данные</span></div><div class="card dashboard-metric"><small>Активные объекты</small><strong>${projects.length}</strong><span>Реальные объекты в работе</span></div><div class="card dashboard-metric featured"><small>К компенсации</small><strong>${money(due())}</strong><span>${pendingExpenses.length} незакрытых расходов</span></div></section><section class="card panel-card global-finance-list"><div class="section compact"><div><h2>Чеки / Разное к компенсации</h2><p class="muted">PDF формируется внутри нужного объекта</p></div></div><div id="list"></div></section>`;
+    const totals=companyFinanceTotals();content.innerHTML = `<section class="dashboard-metrics"><div class="card dashboard-metric"><small>Прибыль объектов</small><strong>${money(totals.objectProfit)}</strong><span>${projects.length} активных объектов</span></div><button class="card dashboard-metric" data-open-general><small>Общие расходы ADMA</small><strong>${money(totals.general)}</strong><span>${(state.companyExpenses||[]).length} записей</span></button><div class="card dashboard-metric"><small>К возмещению</small><strong>${money(totals.due)}</strong><span>${pendingExpenses.length} незакрытых расходов</span></div><div class="card dashboard-metric featured"><small>Итоговая прибыль ADMA</small><strong>${money(totals.profit)}</strong><span>Прибыль объектов − общие расходы</span></div></section><section class="card finance-formula"><strong>Единый расчёт</strong><p>${money(totals.objectProfit)} − ${money(totals.general)} = <b>${money(totals.profit)}</b></p><p class="muted">Чеки / Разное объектов не вычитаются повторно.</p></section><section class="card panel-card global-finance-list"><div class="section compact"><div><h2>Чеки / Разное к компенсации</h2><p class="muted">PDF формируется внутри нужного объекта</p></div></div><div id="list"></div></section>`;
+    const openGeneral=content.querySelector('[data-open-general]');if(openGeneral)openGeneral.onclick=()=>{globalFinanceSection='general';render()};
     renderExpenses(pendingExpenses, content.querySelector('#list'));
   }
 
@@ -1160,6 +1269,7 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       state.stages = (cloud.stages || []).map(mapStage);
+      await loadFinanceCloud();
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();

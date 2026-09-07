@@ -27,10 +27,20 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
  }
+});
+test('foreman cannot load or mutate profit data',async()=>{
+ for(const body of [{action:'load'},{action:'save_act',act:{}},{action:'save_company_expense',expense:{}}]){
+  const r=await handler('finance-api',{},actor)(request(body));assert.equal(r.status,403);
+ }
+});
+test('finance file upload authenticates before storage',async()=>{
+ let touched=false;const db={auth:{getUser:async()=>({error:Error('forged')})},storage:{from:()=>{touched=true;}}};
+ const form=new FormData();form.append('accessToken','forged');form.append('file',new File(['%PDF'],'act.pdf',{type:'application/pdf'}));
+ const r=await handler('finance-file-upload',db)(new Request('https://test.invalid',{method:'POST',body:form}));assert.equal(r.status,401);assert.equal(touched,false);
 });
 test('foreman cannot create a web account',async()=>{
  const r=await handler('account-admin',{},actor)(request({...credentials,action:'create_user',name:'Test',role:'partner'}));assert.equal(r.status,403);

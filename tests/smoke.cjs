@@ -21,7 +21,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     const requests = [], uploads = [], pdfs = [];
     const projects = [{id:'project-1',name:'Тестовый объект',status:'in_progress',address:'Москва, ул. Тестовая, 1',area_sqm:86.5,client_name:'Иван Петров',client_phone:'+7 900 000-00-00',start_date:'2026-09-01',planned_end_date:'2027-02-15',contract_number:'АДМА-17'}, {id:'project-2',name:'Другой объект',status:'active'}, {id:'project-3',name:'Пустой объект',status:'preparation'}];
     let stages = [{id:'stage-1',project_id:'project-1',name:'Подготовка',position:0,progress:100,status:'completed',planned_start:'2026-08-20',planned_end:'2026-08-31',actual_start:'2026-08-20',actual_end:'2026-08-30',work_cost:50000},{id:'stage-2',project_id:'project-1',name:'Электрика',position:10,progress:40,status:'delayed',planned_start:'2026-09-01',planned_end:'2026-09-05',actual_start:'2026-09-02',comment:'Черновой монтаж'}];
-    let expenses = [], failSave = false, delaySave = false;
+    let expenses = [], acts = [], actCosts = [], actPayments = [], waybills = [], waybillPayments = [], companyExpenses = [], failSave = false, delaySave = false;
     await page.route('https://telegram.org/**', r => r.fulfill({body:''}));
     await page.addInitScript(web => {
       window.Telegram = {WebApp:{initData:web ? '' : 'test-only',ready(){},expand(){},openLink(url){window.lastPdf=url;}}};
@@ -47,13 +47,26 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
         assert.equal(req.method(),'POST');
         assert.match(req.headers()['content-type'],/^text\/plain/);
         const body=JSON.parse(req.postData()); requests.push(body);
-        if(url.endsWith('/adma-api') && web) assert.equal(body.accessToken,'test-token');
+        if((url.endsWith('/adma-api')||url.endsWith('/finance-api')) && web) assert.equal(body.accessToken,'test-token');
         if(url.endsWith('/telegram-auth')) data.user={id:'user',role:'owner',is_active:true};
         else if(url.endsWith('/web-auth')) {
           if(body.action==='login' && body.password!=='test-password-123') {status=401;data={error:'invalid_credentials'};}
           else if(body.action==='logout') data={ok:true};
           else data={ok:true,session:{access_token:'test-token',refresh_token:'test-refresh',expires_at:Math.floor(Date.now()/1000)+3600}};
         }
+        else if(url.endsWith('/finance-api')&&body.action==='load') data={ok:true,acts,act_costs:actCosts,act_payments:actPayments,waybills,waybill_payments:waybillPayments,company_expenses:companyExpenses};
+        else if(url.endsWith('/finance-api')&&body.action==='save_act'){if(body.act.id)Object.assign(acts.find(x=>x.id===body.act.id),body.act);else acts.push({...body.act,id:'act-'+(acts.length+1)});}
+        else if(url.endsWith('/finance-api')&&body.action==='delete_act')acts=acts.filter(x=>x.id!==body.id);
+        else if(url.endsWith('/finance-api')&&body.action==='add_act_cost')actCosts.push({id:'act-cost-'+(actCosts.length+1),act_id:body.act_id,cost_date:body.date,amount:body.amount,description:body.comment});
+        else if(url.endsWith('/finance-api')&&body.action==='add_act_payment')actPayments.push({id:'act-payment-'+(actPayments.length+1),act_id:body.act_id,payment_date:body.date,amount:body.amount,comment:body.comment});
+        else if(url.endsWith('/finance-api')&&body.action==='delete_act_cost')actCosts=actCosts.filter(x=>x.id!==body.id);
+        else if(url.endsWith('/finance-api')&&body.action==='delete_act_payment')actPayments=actPayments.filter(x=>x.id!==body.id);
+        else if(url.endsWith('/finance-api')&&body.action==='save_waybill'){if(body.waybill.id)Object.assign(waybills.find(x=>x.id===body.waybill.id),body.waybill);else waybills.push({...body.waybill,id:'waybill-'+(waybills.length+1)});}
+        else if(url.endsWith('/finance-api')&&body.action==='delete_waybill')waybills=waybills.filter(x=>x.id!==body.id);
+        else if(url.endsWith('/finance-api')&&body.action==='add_waybill_payment')waybillPayments.push({id:'waybill-payment-'+(waybillPayments.length+1),waybill_id:body.waybill_id,payment_date:body.date,amount:body.amount,comment:body.comment});
+        else if(url.endsWith('/finance-api')&&body.action==='delete_waybill_payment')waybillPayments=waybillPayments.filter(x=>x.id!==body.id);
+        else if(url.endsWith('/finance-api')&&body.action==='save_company_expense'){if(body.expense.id)Object.assign(companyExpenses.find(x=>x.id===body.expense.id),body.expense);else companyExpenses.push({...body.expense,id:'company-'+(companyExpenses.length+1),author:{first_name:'Илья'}});}
+        else if(url.endsWith('/finance-api')&&body.action==='delete_company_expense')companyExpenses=companyExpenses.filter(x=>x.id!==body.id);
         else if(body.action==='load') data={ok:true,projects,expenses,stages,current_user:{id:'user',role:'owner',is_active:true,web_login:web?'ilya':null}};
         else if(body.action==='create_project') {const p={...body.project,id:'project-'+(projects.length+1)};projects.push(p);data.project=p;}
         else if(body.action==='update_project') {const p=projects.find(p=>p.id===body.project.id);Object.assign(p,body.project);data.project=p;}
@@ -92,7 +105,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('Облако подключено')));pass('application loads');
     assert.equal(await page.locator('.sidebar').isVisible(),true);assert.match(await page.locator('#app').innerText(),/Требует внимания/);assert.match(await page.locator('.brand').innerText(),/ADMA/);
     assert.deepEqual(await page.locator('.side-nav [data-side-tab] b').allTextContents(),['Главная','Объекты','Финансы','Заявки','Дизайнеры','Мастера']);pass('desktop dashboard matches the approved application shell');
-    await switchTab('finance');assert.match(page.url(),/#\/finance$/);assert.equal(await page.locator('[data-global-finance-section]').count(),2);await page.click('[data-global-finance-section="general"]');assert.match(await page.locator('#app').innerText(),/вне объектов/);
+    await switchTab('finance');assert.match(page.url(),/#\/finance$/);assert.equal(await page.locator('[data-global-finance-section]').count(),2);await page.click('[data-global-finance-section="general"]');assert.match(await page.locator('#app').innerText(),/Не связаны с объектами/);
     for(const [tab,label] of [['leads','Заявки'],['designers','Дизайнеры'],['masters','Мастера']]){await switchTab(tab);assert.match(page.url(),new RegExp('#/'+tab+'$'));assert.match(await page.locator('#app').innerText(),new RegExp(label));}pass('all primary routes open');
     await switchTab('home');
     await open();await submit();await closed();assert.equal(expenses.length,1);assert.equal(expenses[0].receipt_path,null);pass('create without receipt');
@@ -114,14 +127,23 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     await page.click('#addStage');await page.fill('#sName','Чистовые работы');await page.fill('#sProgress','0');await page.fill('#sPlannedStart','2026-09-21');await page.fill('#sPlannedEnd','2026-10-15');await page.evaluate(()=>stageForm.requestSubmit());await until(()=>page.evaluate(()=>!stageDlg.open));assert.equal(stages.length,3);
     await page.locator('[data-stage-id="stage-3"]').click();await page.fill('#sProgress','25');await page.selectOption('#sStatus','in_progress');await page.evaluate(()=>stageForm.requestSubmit());await until(()=>page.evaluate(()=>!stageDlg.open));assert.equal(stages[2].progress,25);assert.equal(stages[2].status,'in_progress');
     await page.locator('[data-stage-id="stage-3"]').click();page.once('dialog',d=>d.accept());await page.click('#deleteStage');await until(()=>stages.length===2);await until(()=>page.evaluate(()=>!stageDlg.open));pass('create, edit and delete schedule stage');
-    await page.click('[data-project-section="finance"]');assert.equal(await page.locator('[data-project-finance-section]').count(),4);await page.click('[data-project-finance-section="checks"]');
+    await page.click('[data-project-section="finance"]');assert.equal(await page.locator('[data-project-finance-section]').count(),4);
+    await page.click('[data-project-finance-section="acts"]');await page.click('#addAct');await page.fill('#actDlg [name="number"]','A-1');await page.fill('#actDlg [name="title"]','Монтаж');await page.fill('#actDlg [name="amount"]','100000');await page.locator('#actDlg form').evaluate(f=>f.requestSubmit());await until(()=>acts.length===1);assert.equal(acts[0].project_id,'project-1');
+    await page.click('[data-act-cost]');await page.fill('#financeLineDlg [name="amount"]','30000');await page.locator('#financeLineDlg form').evaluate(f=>f.requestSubmit());await until(()=>actCosts.length===1);assert.match(await page.locator('.finance-record').innerText(),/70\s*000/);
+    await page.click('[data-act-payment]');await page.fill('#financeLineDlg [name="amount"]','40000');await page.locator('#financeLineDlg form').evaluate(f=>f.requestSubmit());await until(()=>actPayments.length===1);pass('act CRUD and profit use costs, not customer payments');
+    await page.click('[data-project-finance-section="waybills"]');await page.click('#addWaybill');await page.fill('#waybillDlg [name="number"]','N-1');await page.fill('#waybillDlg [name="supplier"]','Поставщик');await page.fill('#waybillDlg [name="amount"]','80000');await page.locator('#waybillDlg form').evaluate(f=>f.requestSubmit());await until(()=>waybills.length===1);assert.equal(waybills[0].project_id,'project-1');await page.click('[data-waybill-payment]');await page.fill('#financeLineDlg [name="amount"]','50000');await page.locator('#financeLineDlg form').evaluate(f=>f.requestSubmit());await until(()=>waybillPayments.length===1);assert.match(await page.locator('.finance-record').innerText(),/30\s*000/);pass('waybill CRUD calculates remaining amount and profit');
+    await page.click('[data-project-finance-section="summary"]');assert.match(await page.locator('#projectFinanceContent').innerText(),/Итоговая прибыль объекта/);assert.match(await page.locator('#projectFinanceContent').innerText(),/100\s*000/);pass('checks do not reduce object profit');
+    await page.click('[data-project-finance-section="checks"]');
     await page.click('#pdfAllPending');await until(()=>pdfs.length===1);
     assert(pdfs[0].includes('["expense-1","expense-2"]'));
     assert(!pdfs[0].includes('other-project-expense'));assert(!pdfs[0].includes('already-reimbursed'));assert(!pdfs[0].includes('paid-by-client'));
     pass('PDF includes only pending expenses of the opened project');
     await page.click('#pdfPickPending');await page.locator('.pdfExpenseCheck').first().uncheck();await page.click('#pdfBuildSelected');await until(()=>pdfs.length===2);assert(pdfs[1].includes('["expense-2"]'));await until(()=>page.evaluate(()=>!document.getElementById('pdfDlg').open));pass('PDF selected');
     await page.click('#pdfPickPending');assert.equal(await page.locator('.pdfExpenseCheck').count(),2);await page.click('#pdfClear');assert.equal(await page.locator('#pdfBuildSelected').isDisabled(),true);await page.click('#closePdf');pass('empty selection cannot export all projects');
-    await page.click('#back');await page.locator('.project-list-card').filter({hasText:'Пустой объект'}).click();await page.click('[data-project-section="finance"]');await page.click('[data-project-finance-section="checks"]');assert.equal(await page.locator('#pdfAllPending').count(),0);pass('empty project does not offer a global PDF');
+    await switchTab('finance');await page.click('[data-global-finance-section="general"]');await page.click('#addCompanyExpense');await page.fill('#companyExpenseDlg [name="amount"]','10000');await page.fill('#companyExpenseDlg [name="description"]','Сервис');await page.locator('#companyExpenseDlg form').evaluate(f=>f.requestSubmit());await until(()=>companyExpenses.length===1);assert.match(await page.locator('#generalTotal').innerText(),/10\s*000/);await page.click('[data-company-expense]');await page.fill('#companyExpenseDlg [name="amount"]','12000');await page.locator('#companyExpenseDlg form').evaluate(f=>f.requestSubmit());await until(()=>companyExpenses[0].amount===12000);page.once('dialog',d=>d.accept());await page.click('[data-company-expense]');await page.click('#companyExpenseDlg [data-delete]');await until(()=>companyExpenses.length===0);pass('general expense CRUD requires no project');
+    await page.click('[data-global-finance-section="summary"]');assert.match(await page.locator('#globalFinanceContent').innerText(),/Итоговая прибыль ADMA/);pass('global finance aggregates object profit once');
+    await switchTab('projects');
+    await page.locator('.project-list-card').filter({hasText:'Пустой объект'}).click();await page.click('[data-project-section="finance"]');await page.click('[data-project-finance-section="checks"]');assert.equal(await page.locator('#pdfAllPending').count(),0);pass('empty project does not offer a global PDF');
     await page.evaluate(()=>details('expense-1'));await page.click('#markPaid');await until(()=>expenses[0].reimbursed);await until(()=>page.evaluate(()=>!detailDlg.open));pass('mark reimbursed');
     page.on('dialog',d=>d.accept());await page.evaluate(()=>details('expense-1'));await page.click('#del');await until(()=>expenses.length===1);await until(()=>page.evaluate(()=>!detailDlg.open));pass('delete expense');
     await open();await photo();failSave=true;await submit();await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('test_save_failure')));
