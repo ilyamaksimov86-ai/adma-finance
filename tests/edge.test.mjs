@@ -27,9 +27,14 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
+ }
+});
+test('foreman cannot mutate the global master directory',async()=>{
+ for(const body of [{action:'save_master',master:{}},{action:'save_assignment',assignment:{}},{action:'set_master_archived',id:'test'}]){
+  const r=await handler('masters-api',{},actor)(request(body));assert.equal(r.status,403);
  }
 });
 test('foreman cannot load or mutate profit data',async()=>{

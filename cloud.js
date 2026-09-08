@@ -15,6 +15,10 @@
   let projectSection = 'overview';
   let projectFinanceSection = 'summary';
   let globalFinanceSection = 'summary';
+  let masterSearch = '';
+  let masterSpecialtyFilter = '';
+  let masterAvailabilityFilter = '';
+  let showArchivedMasters = false;
   const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'more']);
   const globalTabLabels = {
     home: 'Главная', projects: 'Объекты', finance: 'Финансы',
@@ -35,6 +39,9 @@
     planned: 'Запланирован', in_progress: 'В работе', completed: 'Выполнен',
     delayed: 'Задерживается', paused: 'Приостановлен',
   };
+  const masterSpecialtyLabels = {demolition:'Демонтаж',rough:'Черновые работы',plaster:'Штукатурка',painting:'Малярные работы',tile:'Плитка',plumbing:'Сантехника',electrical:'Электрика',drywall:'ГКЛ',flooring:'Напольные покрытия',carpentry:'Столярные работы',universal:'Универсал',other:'Другое'};
+  const masterPriceLabels = {low:'Ниже среднего',medium:'Средний',high:'Выше среднего',premium:'Премиум'};
+  const assignmentStatusLabels = {planned:'Запланирован',active:'Работает',completed:'Завершён',cancelled:'Отменён'};
 
   const optionalValue = value => String(value || '').trim() || null;
   const projectStatusLabel = status => projectStatuses[status] || projectStatuses.active;
@@ -135,6 +142,10 @@
     return post('finance-api', { ...await AdmaAuth.credentials(), action, ...extra });
   }
 
+  async function mastersApi(action, extra = {}) {
+    return post('masters-api', { ...await AdmaAuth.credentials(), action, ...extra });
+  }
+
   function mapProject(p) {
     return {
       id: p.id,
@@ -189,6 +200,8 @@
   const mapWaybill = w => ({...w, projectId:w.project_id, date:w.waybill_date, amount:numeric(w.amount), filePath:w.file_path||'', fileUrl:w.file_url||''});
   const mapWaybillPayment = x => ({...x, waybillId:x.waybill_id, date:x.payment_date, amount:numeric(x.amount)});
   const mapCompanyExpense = x => ({...x, date:x.expense_date, amount:numeric(x.amount), filePath:x.file_path||'', fileUrl:x.file_url||'', authorName:x.author?([x.author.first_name,x.author.last_name].filter(Boolean).join(' ')||x.author.web_login||x.author.telegram_username||'ADMA'):'ADMA'});
+  const mapMaster = x => ({...x, primarySpecialty:x.primary_specialty||'other', additionalSkills:Array.isArray(x.additional_skills)?x.additional_skills:[], priceLevel:x.price_level||'', isActive:x.is_active!==false});
+  const mapMasterAssignment = x => ({...x, masterId:x.master_id, projectId:x.project_id, stageId:x.stage_id||'', startDate:x.start_date, plannedEndDate:x.planned_end_date||'', actualEndDate:x.actual_end_date||''});
 
   async function loadFinanceCloud() {
     if (!canManageProjects()) {
@@ -200,12 +213,19 @@
     state.waybills=(data.waybills||[]).map(mapWaybill);state.waybillPayments=(data.waybill_payments||[]).map(mapWaybillPayment);state.companyExpenses=(data.company_expenses||[]).map(mapCompanyExpense);
   }
 
+  async function loadMastersCloud() {
+    const data=await mastersApi('load');
+    state.masters=(data.masters||[]).map(mapMaster);
+    state.masterAssignments=(data.assignments||[]).map(mapMasterAssignment);
+    state.projectResponsibles=data.project_responsibles||[];
+  }
+
   async function loadCloud() {
     const data = await api('load');
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
-    await loadFinanceCloud();
+    await Promise.all([loadFinanceCloud(),loadMastersCloud()]);
     save();
     render();
     return data;
@@ -712,9 +732,55 @@
     if (firstMetricNote && summary.plannedProgress != null) firstMetricNote.textContent = `Плановая готовность ${summary.plannedProgress}% · ${summary.stages.length} этапов`;
     const list = document.getElementById('stageList');
     if (!summary.stages.length) list.innerHTML = `<div class="card schedule-empty"><h3>График пока пуст</h3><p class="muted">Добавьте этапы работ — система автоматически рассчитает готовность и задержки.</p>${canManageProjects() && !isArchived ? '<button id="emptyAddStage" class="btn primary">Добавить первый этап</button>' : ''}</div>`;
-    else list.innerHTML = summary.stages.map(stage => `<button class="card stage-card" data-stage-id="${esc(stage.id)}"><div class="stage-card-head"><span class="stage-card-title"><strong>${esc(stage.name)}</strong><span>${esc(stage.comment || 'Без комментария')}</span></span><span class="stage-status ${esc(stage.status)}">${esc(stageStatuses[stage.status] || stage.status)}</span></div><div class="stage-progress-row"><div class="progress-track"><div class="progress-fill ${stage.status === 'delayed' ? 'warn' : ''}" style="width:${stage.progress}%"></div></div><strong>${stage.progress}%</strong></div><div class="stage-card-meta"><div><small>План</small><strong>${esc(stage.plannedStart ? projectDate(stage.plannedStart) : '—')} — ${esc(stage.plannedEnd ? projectDate(stage.plannedEnd) : '—')}</strong></div><div><small>Факт</small><strong>${esc(stage.actualStart ? projectDate(stage.actualStart) : '—')} — ${esc(stage.actualEnd ? projectDate(stage.actualEnd) : '—')}</strong></div><div><small>Стоимость работ</small><strong>${stage.workCost == null ? '—' : money(stage.workCost)}</strong></div></div></button>`).join('');
+    else list.innerHTML = summary.stages.map(stage => {const assigned=(state.masterAssignments||[]).filter(x=>x.stageId===stage.id&&!['cancelled'].includes(x.status)).map(x=>(state.masters||[]).find(m=>m.id===x.masterId)?.name).filter(Boolean);return `<button class="card stage-card" data-stage-id="${esc(stage.id)}"><div class="stage-card-head"><span class="stage-card-title"><strong>${esc(stage.name)}</strong><span>${esc(stage.comment || 'Без комментария')}</span>${assigned.length?`<span class="stage-masters">◎ ${esc(assigned.join(', '))}</span>`:''}</span><span class="stage-status ${esc(stage.status)}">${esc(stageStatuses[stage.status] || stage.status)}</span></div><div class="stage-progress-row"><div class="progress-track"><div class="progress-fill ${stage.status === 'delayed' ? 'warn' : ''}" style="width:${stage.progress}%"></div></div><strong>${stage.progress}%</strong></div><div class="stage-card-meta"><div><small>План</small><strong>${esc(stage.plannedStart ? projectDate(stage.plannedStart) : '—')} — ${esc(stage.plannedEnd ? projectDate(stage.plannedEnd) : '—')}</strong></div><div><small>Факт</small><strong>${esc(stage.actualStart ? projectDate(stage.actualStart) : '—')} — ${esc(stage.actualEnd ? projectDate(stage.actualEnd) : '—')}</strong></div><div><small>Стоимость работ</small><strong>${stage.workCost == null ? '—' : money(stage.workCost)}</strong></div></div></button>`}).join('');
     const add = document.getElementById('addStage') || document.getElementById('emptyAddStage'); if (add) add.onclick = () => openStageDialog(p.id);
     list.querySelectorAll('[data-stage-id]').forEach(button => button.onclick = () => openStageDialog(p.id, button.dataset.stageId));
+  }
+
+  function assignmentBlocksAvailability(item,today=new Date().toISOString().slice(0,10)){return ['planned','active'].includes(item.status)&&!item.actualEndDate&&(!item.plannedEndDate||item.plannedEndDate>=today)}
+  function masterAvailability(masterId){
+    const today=new Date().toISOString().slice(0,10),items=(state.masterAssignments||[]).filter(x=>x.masterId===masterId&&assignmentBlocksAvailability(x,today)).sort((a,b)=>(a.status==='active'?-1:1)-(b.status==='active'?-1:1)||a.startDate.localeCompare(b.startDate));
+    if(!items.length)return {key:'free',label:'Свободен',className:'free',current:null,release:''};
+    const dated=items.filter(x=>x.plannedEndDate);const release=dated.length===items.length?dated.map(x=>x.plannedEndDate).sort().at(-1):'';
+    return {key:release?'releasing':'busy',label:release?`Освободится ${projectDate(release)}`:'Занят',className:release?'releasing':'busy',current:items[0],release};
+  }
+  const masterContact=m=>m.phone||m.telegram||'Контакт не указан';
+  const assignmentPeriod=x=>`${projectDate(x.startDate)} — ${x.actualEndDate?projectDate(x.actualEndDate):x.plannedEndDate?projectDate(x.plannedEndDate):'без даты'}`;
+  const assignmentProject=x=>proj(x.projectId);
+  const assignmentStage=x=>(state.stages||[]).find(s=>s.id===x.stageId);
+  function responsibleName(user){return [user?.first_name,user?.last_name].filter(Boolean).join(' ')||user?.web_login||user?.telegram_username||'Сотрудник'}
+
+  async function refreshMasters(message){await loadMastersCloud();render();if(message)banner(message,'ok')}
+  function masterFormOptions(selected=[]){return Object.entries(masterSpecialtyLabels).map(([value,label])=>`<option value="${value}" ${selected.includes(value)?'selected':''}>${label}</option>`).join('')}
+  function openMasterDialog(masterId=''){
+    if(!canManageProjects())return;const master=(state.masters||[]).find(x=>x.id===masterId);
+    const dlg=dynamicDialog('masterEditDlg',master?'Редактировать мастера':'Новый мастер',`<label>Имя<input name="name" required maxlength="160" value="${esc(master?.name||'')}"></label><div class="grid"><label>Телефон<input name="phone" maxlength="80" value="${esc(master?.phone||'')}"></label><label>Telegram<input name="telegram" maxlength="100" placeholder="@username" value="${esc(master?.telegram||'')}"></label></div><label>Основная специализация<select name="specialty">${masterFormOptions([master?.primarySpecialty||'other'])}</select></label><label>Дополнительные навыки<select name="skills" multiple size="6">${masterFormOptions(master?.additionalSkills||[])}</select><small class="muted">Можно выбрать несколько</small></label><div class="grid"><label>Внутренний рейтинг<input name="rating" type="number" min="1" max="5" step="0.1" value="${master?.rating??''}"></label><label>Уровень цен<select name="price"><option value="">Не указан</option>${Object.entries(masterPriceLabels).map(([value,label])=>`<option value="${value}" ${master?.priceLevel===value?'selected':''}>${label}</option>`).join('')}</select></label></div><label>Заметки<textarea name="notes" rows="4" maxlength="4000">${esc(master?.notes||'')}</textarea></label>${master?`<button type="button" class="btn ${master.isActive?'danger':'secondary'} full-button" data-archive>${master.isActive?'Архивировать мастера':'Вернуть из архива'}</button>`:''}`);
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{await mastersApi('save_master',{master:{id:master?.id,name:form.elements.name.value,phone:form.elements.phone.value,telegram:form.elements.telegram.value,primary_specialty:form.elements.specialty.value,additional_skills:[...form.elements.skills.selectedOptions].map(x=>x.value),rating:form.elements.rating.value||null,price_level:form.elements.price.value||null,notes:form.elements.notes.value}});dlg.close();await refreshMasters(master?'Мастер обновлён':'Мастер добавлен')}catch(e){banner('Не удалось сохранить мастера: '+e.message,'error')}finally{button.disabled=false}};
+    const archive=dlg.querySelector('[data-archive]');if(archive)archive.onclick=async()=>{const active=(state.masterAssignments||[]).filter(x=>x.masterId===master.id&&assignmentBlocksAvailability(x)).length;if(!confirm(master.isActive?`Архивировать мастера?${active?' Активные назначения сохранятся.':''}`:'Вернуть мастера из архива?'))return;try{await mastersApi('set_master_archived',{id:master.id,archived:master.isActive});dlg.close();await refreshMasters(master.isActive?'Мастер архивирован':'Мастер восстановлен')}catch(e){banner('Не удалось изменить статус: '+e.message,'error')}};
+    dlg.showModal();
+  }
+
+  function openMasterDetails(masterId){
+    const master=(state.masters||[]).find(x=>x.id===masterId);if(!master)return;const availability=masterAvailability(master.id);const current=availability.current;const history=(state.masterAssignments||[]).filter(x=>x.masterId===master.id).sort((a,b)=>b.startDate.localeCompare(a.startDate));
+    let dlg=document.getElementById('masterDetailsDlg');if(!dlg){dlg=document.createElement('dialog');dlg.id='masterDetailsDlg';document.body.appendChild(dlg)}
+    dlg.innerHTML=`<div class="dialog-body"><div class="sheethead"><button type="button" data-close>Закрыть</button><h2>${esc(master.name)}</h2>${canManageProjects()?'<button class="btn secondary" data-edit>Изменить</button>':'<span></span>'}</div><div class="master-profile"><div><span class="availability ${availability.className}">${esc(availability.label)}</span><h3>${esc(masterSpecialtyLabels[master.primarySpecialty]||'Другое')}</h3><p>${esc(masterContact(master))}</p></div><dl class="object-details"><div><dt>Telegram</dt><dd>${esc(master.telegram||'—')}</dd></div><div><dt>Рейтинг</dt><dd>${master.rating?esc(master.rating+' / 5'):'—'}</dd></div><div><dt>Уровень цен</dt><dd>${esc(masterPriceLabels[master.priceLevel]||'—')}</dd></div><div><dt>Навыки</dt><dd>${esc(master.additionalSkills.map(x=>masterSpecialtyLabels[x]||x).join(', ')||'—')}</dd></div></dl>${master.notes?`<div class="master-notes">${esc(master.notes)}</div>`:''}</div>${current?`<section class="card master-current"><small>Текущее назначение</small><strong>${esc(assignmentProject(current)?.name||'Объект')}</strong><span>${esc(assignmentStage(current)?.name||'Без этапа')} · ${esc(assignmentPeriod(current))}</span></section>`:''}<div class="section compact"><h3>История объектов</h3></div><div class="assignment-history">${history.length?history.map(x=>`<div class="card"><span><strong>${esc(assignmentProject(x)?.name||'Объект')}</strong><small>${esc(assignmentStage(x)?.name||'Без этапа')} · ${esc(assignmentPeriod(x))}</small></span><span class="badge ${x.status==='completed'?'paid':x.status==='cancelled'?'neutral':'pending'}">${esc(assignmentStatusLabels[x.status]||x.status)}</span></div>`).join(''):'<div class="empty">Назначений пока нет</div>'}</div></div>`;
+    dlg.querySelector('[data-close]').onclick=()=>dlg.close();const edit=dlg.querySelector('[data-edit]');if(edit)edit.onclick=()=>{dlg.close();openMasterDialog(master.id)};dlg.showModal();
+  }
+
+  function openAssignmentDialog(projectId,assignmentId=''){
+    if(!canManageProjects())return;const item=(state.masterAssignments||[]).find(x=>x.id===assignmentId);const masters=(state.masters||[]).filter(x=>x.isActive||x.id===item?.masterId);const stages=stagesFor(projectId);
+    if(!masters.length){if(confirm('В базе пока нет активных мастеров. Перейти к созданию мастера?'))navigateGlobal('masters');return}
+    const dlg=dynamicDialog('assignmentDlg',item?'Редактировать назначение':'Добавить мастера',`<label>Мастер<select name="master" required>${masters.map(m=>`<option value="${esc(m.id)}" ${item?.masterId===m.id?'selected':''}>${esc(m.name)} · ${esc(masterSpecialtyLabels[m.primarySpecialty]||'Другое')}</option>`).join('')}</select></label><label>Этап<select name="stage"><option value="">На объект в целом</option>${stages.map(s=>`<option value="${esc(s.id)}" ${item?.stageId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><div class="grid"><label>Дата начала<input name="start" type="date" required value="${esc(item?.startDate||new Date().toISOString().slice(0,10))}"></label><label>Плановое окончание<input name="plannedEnd" type="date" value="${esc(item?.plannedEndDate||'')}"></label></div><div class="grid"><label>Статус<select name="status">${Object.entries(assignmentStatusLabels).map(([value,label])=>`<option value="${value}" ${item?.status===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Фактическое окончание<input name="actualEnd" type="date" value="${esc(item?.actualEndDate||'')}"></label></div><label>Комментарий<textarea name="comment" rows="3" maxlength="2000">${esc(item?.comment||'')}</textarea></label>${item&&item.status!=='cancelled'?'<button type="button" class="btn danger full-button" data-cancel>Отменить назначение</button>':''}<button type="button" class="btn secondary full-button" data-create-master>Создать нового мастера в общей базе</button>`);
+    const saveAssignment=async(form,allowConflict=false)=>mastersApi('save_assignment',{allow_conflict:allowConflict,assignment:{id:item?.id,master_id:form.elements.master.value,project_id:projectId,stage_id:form.elements.stage.value||null,start_date:form.elements.start.value,planned_end_date:form.elements.plannedEnd.value||null,actual_end_date:form.elements.actualEnd.value||null,status:form.elements.status.value,comment:form.elements.comment.value}});
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{try{await saveAssignment(form)}catch(e){if(e.message!=='assignment_conflict')throw e;if(!confirm('Мастер уже назначен на другой объект в этот период. Всё равно сохранить назначение?'))return;await saveAssignment(form,true)}dlg.close();await refreshMasters(item?'Назначение обновлено':'Мастер назначен')}catch(e){banner('Не удалось сохранить назначение: '+e.message,'error')}finally{button.disabled=false}};
+    const cancel=dlg.querySelector('[data-cancel]');if(cancel)cancel.onclick=async()=>{if(!confirm('Отменить назначение? Оно останется в истории мастера.'))return;try{await mastersApi('cancel_assignment',{id:item.id});dlg.close();await refreshMasters('Назначение отменено')}catch(e){banner('Не удалось отменить назначение: '+e.message,'error')}};
+    dlg.querySelector('[data-create-master]').onclick=()=>{dlg.close();navigateGlobal('masters');setTimeout(()=>openMasterDialog(),0)};dlg.showModal();
+  }
+
+  function renderProjectTeam(p){
+    const assignments=(state.masterAssignments||[]).filter(x=>x.projectId===p.id&&x.status!=='cancelled').sort((a,b)=>a.startDate.localeCompare(b.startDate));const responsibles=(state.projectResponsibles||[]).filter(x=>x.project_id===p.id&&x.user?.is_active!==false);
+    $('#projectSection').innerHTML=`<div class="page-title-row"><div><h2>Команда объекта</h2><p>Ответственные и мастера, назначенные из общей базы</p></div>${canManageProjects()&&p.status!=='archived'?'<button id="addMasterAssignment" class="btn primary">+ Добавить мастера</button>':''}</div><div class="section compact"><h3>Ответственные</h3></div><section class="responsible-grid">${responsibles.length?responsibles.map(x=>`<div class="card responsible-card"><span class="master-avatar">${esc(responsibleName(x.user).slice(0,2).toUpperCase())}</span><div><small>${esc(roleLabel(x.user?.role||'foreman'))}</small><strong>${esc(responsibleName(x.user))}</strong><span>${esc(x.user?.telegram_username?'@'+String(x.user.telegram_username).replace(/^@/,''):'Контакт в профиле')}</span></div></div>`).join(''):'<div class="card empty">Ответственные пока не назначены</div>'}<div class="card responsible-card muted-card"><span class="master-avatar">✦</span><div><small>Дизайнер</small><strong>Не назначен</strong><span>Связь появится на этапе CRM дизайнеров</span></div></div></section><div class="section compact"><div><h3>Мастера</h3><p class="muted">${assignments.length} назначений</p></div></div><div class="project-team-list">${assignments.length?assignments.map(x=>{const m=(state.masters||[]).find(y=>y.id===x.masterId);return `<button class="card team-master-card" data-assignment="${esc(x.id)}"><span class="master-avatar">${esc((m?.name||'М').slice(0,2).toUpperCase())}</span><span class="grow"><strong>${esc(m?.name||'Мастер')}</strong><small>${esc(masterSpecialtyLabels[m?.primarySpecialty]||'Другое')} · ${esc(assignmentStage(x)?.name||'Объект целиком')}</small><small>${esc(assignmentPeriod(x))} · ${esc(masterContact(m||{}))}</small></span><span class="badge ${x.status==='completed'?'paid':'pending'}">${esc(assignmentStatusLabels[x.status]||x.status)}</span></button>`}).join(''):'<div class="card empty">На объект пока не назначены мастера</div>'}</div>`;
+    const add=document.getElementById('addMasterAssignment');if(add)add.onclick=()=>openAssignmentDialog(p.id);document.querySelectorAll('[data-assignment]').forEach(button=>button.onclick=()=>canManageProjects()?openAssignmentDialog(p.id,button.dataset.assignment):openMasterDetails((state.masterAssignments||[]).find(x=>x.id===button.dataset.assignment)?.masterId));
   }
 
   const actStatusLabels={draft:'Черновик',issued:'Выставлен',signed:'Подписан',partially_paid:'Частично оплачен',paid:'Оплачен'};
@@ -858,6 +924,7 @@
     if (projectSection === 'overview') renderProjectOverview(p);
     else if (projectSection === 'schedule') renderProjectSchedule(p);
     else if (projectSection === 'finance') renderProjectFinance(p);
+    else if (projectSection === 'team') renderProjectTeam(p);
     else renderProjectPlaceholder(projectSection);
     document.querySelectorAll('[data-project-section]').forEach(button => button.onclick = () => navigateProject(p.id, button.dataset.projectSection));
   }
@@ -977,9 +1044,17 @@
     $('#app').innerHTML = `${pageHeader(`ADMA · ${title.toUpperCase()}`, title, 'Раздел встроен в единую структуру приложения')}${moduleScreen(icon, title, description, relation)}`;
   }
 
+  function renderMastersCloud(){
+    if(!canManageProjects()){$('#app').innerHTML=`${pageHeader('ADMA · МАСТЕРА','Мастера','Глобальная база доступна владельцу и партнёру')}${moduleScreen('◎','Доступ ограничен','Назначенных на ваши объекты мастеров можно посмотреть в разделе «Команда» нужного объекта.','Объект → Команда')}`;return}
+    const all=(state.masters||[]).filter(m=>showArchivedMasters?!m.isActive:m.isActive);const filtered=all.filter(m=>{const availability=masterAvailability(m.id);const haystack=[m.name,m.phone,m.telegram,masterSpecialtyLabels[m.primarySpecialty],...m.additionalSkills.map(x=>masterSpecialtyLabels[x]||x)].join(' ').toLowerCase();return(!masterSearch||haystack.includes(masterSearch.toLowerCase()))&&(!masterSpecialtyFilter||m.primarySpecialty===masterSpecialtyFilter||m.additionalSkills.includes(masterSpecialtyFilter))&&(!masterAvailabilityFilter||availability.key===masterAvailabilityFilter)});
+    $('#app').innerHTML=`${pageHeader('ADMA · КОМАНДА','Мастера','Единая база специалистов и занятость по объектам','<button id="addMaster" class="btn primary">+ Мастер</button>')}<section class="card master-filters"><label>Поиск<input id="masterSearch" type="search" placeholder="Имя, телефон, Telegram" value="${esc(masterSearch)}"></label><label>Специализация<select id="masterSpecialty"><option value="">Все специализации</option>${Object.entries(masterSpecialtyLabels).map(([value,label])=>`<option value="${value}" ${masterSpecialtyFilter===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Занятость<select id="masterAvailability"><option value="">Любая</option><option value="free" ${masterAvailabilityFilter==='free'?'selected':''}>Свободен</option><option value="releasing" ${masterAvailabilityFilter==='releasing'?'selected':''}>Есть дата освобождения</option><option value="busy" ${masterAvailabilityFilter==='busy'?'selected':''}>Занят без даты</option></select></label><button id="toggleArchivedMasters" class="btn secondary">${showArchivedMasters?'Активные':'Архив'}</button></section><div class="master-list">${filtered.length?filtered.map(m=>{const a=masterAvailability(m.id),current=a.current;return `<button class="card master-list-card" data-master-id="${esc(m.id)}"><span class="master-avatar">${esc(m.name.slice(0,2).toUpperCase())}</span><span class="grow"><strong>${esc(m.name)}</strong><small>${esc(masterSpecialtyLabels[m.primarySpecialty]||'Другое')}${m.additionalSkills.length?' · +'+m.additionalSkills.length+' навыка':''}</small><small>${esc(masterContact(m))}${current?' · '+esc(assignmentProject(current)?.name||'Объект'):''}</small></span><span class="availability ${a.className}">${esc(m.isActive?a.label:'В архиве')}</span></button>`}).join(''):`<div class="card empty">${showArchivedMasters?'Архив пуст':'Мастера по фильтру не найдены'}</div>`}</div>`;
+    document.getElementById('addMaster').onclick=()=>openMasterDialog();document.getElementById('masterSearch').oninput=e=>{masterSearch=e.target.value;renderMastersCloud()};document.getElementById('masterSpecialty').onchange=e=>{masterSpecialtyFilter=e.target.value;renderMastersCloud()};document.getElementById('masterAvailability').onchange=e=>{masterAvailabilityFilter=e.target.value;renderMastersCloud()};document.getElementById('toggleArchivedMasters').onclick=()=>{showArchivedMasters=!showArchivedMasters;renderMastersCloud()};document.querySelectorAll('[data-master-id]').forEach(button=>button.onclick=()=>openMasterDetails(button.dataset.masterId));
+  }
+
   function renderFallbackCloud() {
     if (state.tab === 'finance') return renderGlobalFinanceCloud();
-    if (['leads', 'designers', 'masters'].includes(state.tab)) return renderFutureModuleCloud(state.tab);
+    if (state.tab === 'masters') return renderMastersCloud();
+    if (['leads', 'designers'].includes(state.tab)) return renderFutureModuleCloud(state.tab);
     return renderMoreCloud();
   }
 
@@ -1271,7 +1346,7 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       state.stages = (cloud.stages || []).map(mapStage);
-      await loadFinanceCloud();
+      await Promise.all([loadFinanceCloud(),loadMastersCloud()]);
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();
