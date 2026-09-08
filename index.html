@@ -6,10 +6,11 @@
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="ADMA Finance">
-  <meta name="theme-color" content="#f6f6f8">
+  <meta name="theme-color" content="#f8fafc">
   <title>ADMA Finance</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="styles.css?v=28">
+  <link rel="stylesheet" href="design-system.css?v=30">
 </head>
 <body data-locked="loading">
   <header class="topbar">
@@ -36,10 +37,11 @@
     <main id="app" class="content"></main>
   </div>
   <button id="fab" class="fab">＋</button>
-  <nav class="tabs">
+  <nav class="tabs" aria-label="Основная навигация">
     <button class="tab active" data-tab="home"><span>⌂</span><small>Главная</small></button>
     <button class="tab" data-tab="projects"><span>▦</span><small>Объекты</small></button>
     <button class="tab" data-tab="finance"><span>₽</span><small>Финансы</small></button>
+    <button class="tab" data-tab="leads"><span>◇</span><small>Заявки</small></button>
     <button class="tab" data-tab="more"><span>•••</span><small>Ещё</small></button>
   </nav>
   <dialog id="projectDlg">
@@ -87,6 +89,6 @@
   <dialog id="detailDlg"><div id="detail" class="dialog-body"></div></dialog>
   <script src="auth.js?v=23"></script>
   <script src="app.js?v=23"></script>
-  <script src="cloud.js?v=29"></script>
+  <script src="cloud.js?v=30"></script>
 </body>
 </html>
