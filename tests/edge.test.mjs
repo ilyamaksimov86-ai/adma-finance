@@ -27,7 +27,7 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
  }
@@ -71,6 +71,12 @@ test('receipt upload checks web identity before touching storage',async()=>{
  const db={auth:{getUser:async()=>({error:Error('forged')})},storage:{from:()=>{touched=true;}}};
  const form=new FormData();form.append('accessToken','forged');form.append('file',new File(['test'],'receipt.jpg',{type:'image/jpeg'}));
  const r=await handler('receipt-upload',db)(new Request('https://test.invalid',{method:'POST',body:form}));assert.equal(r.status,401);assert.equal(touched,false);
+});
+test('project file upload authenticates before touching private storage',async()=>{
+ let touched=false;
+ const db={auth:{getUser:async()=>({error:Error('forged')})},storage:{from:()=>{touched=true;}}};
+ const form=new FormData();form.append('accessToken','forged');form.append('kind','photo');form.append('project_id','11111111-1111-4111-8111-111111111111');form.append('file',new File(['test'],'photo.jpg',{type:'image/jpeg'}));
+ const r=await handler('project-file-upload',db)(new Request('https://test.invalid',{method:'POST',body:form}));assert.equal(r.status,401);assert.equal(touched,false);
 });
 test('project metadata is normalized and validated',()=>{
  const parse=projectParser();
