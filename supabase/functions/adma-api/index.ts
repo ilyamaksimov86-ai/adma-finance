@@ -19,6 +19,7 @@ function projectInput(input:any,partial=false){
   if(!partial||"area_sqm" in p){if(p.area_sqm==null||p.area_sqm==="")result.area_sqm=null;else{const area=Number(p.area_sqm);if(!Number.isFinite(area)||area<=0||area>10000)return {error:"invalid_area"};result.area_sqm=area}}
   for(const key of ["start_date","planned_end_date","actual_end_date","warranty_until"])if(!partial||key in p){const value=p[key];if(value!=null&&value!==""&&!isoDate.test(String(value)))return {error:"invalid_date"};result[key]=value||null}
   if(!partial||"status" in p){const status=String(p.status||"in_progress");if(!projectStatuses.has(status))return {error:"invalid_status"};result.status=status}
+  if(!partial||"designer_id" in p){const designer=p.designer_id;if(designer!=null&&designer!==""&&!uuid.test(String(designer)))return {error:"invalid_designer"};result.designer_id=designer||null}
   const start="start_date" in result?result.start_date:p.start_date,planned="planned_end_date" in result?result.planned_end_date:p.planned_end_date;
   if(start&&planned&&planned<start)return {error:"invalid_project_dates"};
   return {value:result};

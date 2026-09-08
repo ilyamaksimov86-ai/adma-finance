@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#f6f6f8">
   <title>ADMA Finance</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="styles.css?v=25">
+  <link rel="stylesheet" href="styles.css?v=26">
 </head>
 <body data-locked="loading">
   <header class="topbar">
@@ -51,6 +51,7 @@
       <div class="grid"><label>Площадь, м²<input id="pArea" type="number" inputmode="decimal" min="1" max="10000" step="0.01"></label><label>Номер договора<input id="pContract" maxlength="100"></label></div>
       <label>Заказчик<input id="pClient" maxlength="160"></label>
       <label>Телефон заказчика<input id="pClientPhone" type="tel" maxlength="40" autocomplete="tel"></label>
+      <label>Дизайнер<select id="pDesigner"><option value="">Не назначен</option></select></label>
       <div class="grid"><label>Дата начала<input id="pStartDate" type="date"></label><label>Плановая сдача<input id="pPlannedEndDate" type="date"></label></div>
       <div class="grid"><label>Фактическая сдача<input id="pActualEndDate" type="date"></label><label>Гарантия до<input id="pWarrantyUntil" type="date"></label></div>
       <label>Примечания<textarea id="pComment" rows="3" maxlength="2000"></textarea></label>
@@ -86,6 +87,6 @@
   <dialog id="detailDlg"><div id="detail" class="dialog-body"></div></dialog>
   <script src="auth.js?v=23"></script>
   <script src="app.js?v=23"></script>
-  <script src="cloud.js?v=25"></script>
+  <script src="cloud.js?v=26"></script>
 </body>
 </html>

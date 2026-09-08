@@ -27,7 +27,7 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
  }
@@ -35,6 +35,11 @@ test('all modified Edge Functions parse',()=>{
 test('foreman cannot mutate the global master directory',async()=>{
  for(const body of [{action:'save_master',master:{}},{action:'save_assignment',assignment:{}},{action:'set_master_archived',id:'test'}]){
   const r=await handler('masters-api',{},actor)(request(body));assert.equal(r.status,403);
+ }
+});
+test('foreman cannot load or mutate the designers CRM',async()=>{
+ for(const body of [{action:'load'},{action:'save_designer',designer:{}},{action:'add_interaction',interaction:{}}]){
+  const r=await handler('designers-api',{},actor)(request(body));assert.equal(r.status,403);
  }
 });
 test('foreman cannot load or mutate profit data',async()=>{
@@ -81,7 +86,7 @@ test('project file upload authenticates before touching private storage',async()
 test('project metadata is normalized and validated',()=>{
  const parse=projectParser();
  const valid=parse({name:'  Новый объект  ',status:'preparation',area_sqm:'86.5',client_name:' Заказчик ',start_date:'2026-09-10',planned_end_date:'2027-01-20'});
- assert.deepEqual(valid.value,{name:'Новый объект',address:null,client_name:'Заказчик',client_phone:null,comment:null,contract_number:null,area_sqm:86.5,start_date:'2026-09-10',planned_end_date:'2027-01-20',actual_end_date:null,warranty_until:null,status:'preparation'});
+ assert.deepEqual(valid.value,{name:'Новый объект',address:null,client_name:'Заказчик',client_phone:null,comment:null,contract_number:null,area_sqm:86.5,start_date:'2026-09-10',planned_end_date:'2027-01-20',actual_end_date:null,warranty_until:null,status:'preparation',designer_id:null});
  assert.equal(parse({name:'Объект',area_sqm:0}).error,'invalid_area');
  assert.equal(parse({name:'Объект',status:'unknown'}).error,'invalid_status');
  assert.equal(parse({name:'Объект',start_date:'2026-10-01',planned_end_date:'2026-09-01'}).error,'invalid_project_dates');
