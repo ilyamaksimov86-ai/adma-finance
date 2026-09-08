@@ -8,7 +8,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
   const web = process.env.AUTH_MODE === 'web';
   const server = http.createServer((req, res) => {
     const name = req.url.split('?')[0] === '/' ? 'index.html' : req.url.split('?')[0].slice(1);
-    if (!['index.html','app.js','auth.js','cloud.js','styles.css','manifest.webmanifest'].includes(name)) { res.writeHead(404).end(); return; }
+    if (!['index.html','app.js','auth.js','cloud.js','styles.css','ui-final.css','manifest.webmanifest'].includes(name)) { res.writeHead(404).end(); return; }
     res.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html');
     res.end(fs.readFileSync(path.join(root,name)));
   });
