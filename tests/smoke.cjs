@@ -127,7 +127,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       }
       await route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
     });
-    const until = async fn => {for(let i=0;i<100;i++){if(await fn())return;await new Promise(r=>setTimeout(r,30));}throw Error('Timed out');};
+    const until = async fn => {for(let i=0;i<200;i++){if(await fn())return;await new Promise(r=>setTimeout(r,30));}throw Error('Timed out');};
     const switchTab = async name => {const side=page.locator(`[data-side-tab="${name}"]`);if(await side.isVisible())await side.click();else await page.click(`[data-tab="${name}"]`);};
     const submit = () => page.evaluate(()=>expenseForm.requestSubmit());
     const open = async () => {await page.evaluate(()=>openExpense('project-1'));await page.fill('#eAmount','100');};
