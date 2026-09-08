@@ -126,7 +126,7 @@ dialog::backdrop{background:rgba(15,23,42,.48);backdrop-filter:blur(2px)}.sheeth
   .attention-item{min-height:72px}.attention-item>b{display:none}.dashboard-project{display:grid;grid-template-columns:8px minmax(0,1fr)}.dashboard-project>b{grid-column:2;justify-self:start}
   .object-head .object-title-row h2{font-size:26px!important}.object-head>.row{align-items:flex-start;flex-direction:column}.object-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}.object-actions .btn{width:100%}
   .object-schedule{grid-template-columns:1fr 1fr!important;gap:0!important}.object-schedule div{padding:10px!important;border-top:1px solid var(--border)}.object-schedule div:nth-child(odd){border-left:0}.object-schedule div:nth-child(-n+2){border-top:0}
-  .project-tabs,.section-tabs{gap:22px;margin-right:-16px;padding-right:16px;scroll-snap-type:x proximity}.project-tab,.section-tab{min-height:44px;scroll-snap-align:start}.project-summary-grid{grid-template-columns:1fr 1fr;gap:12px}.project-summary-card{min-height:112px}
+  .project-tabs,.section-tabs{width:100%;max-width:100%;gap:22px;margin-right:0;padding-right:0;scroll-snap-type:x proximity}.project-tab,.section-tab{min-height:44px;scroll-snap-align:start}.project-summary-grid{grid-template-columns:1fr 1fr;gap:12px}.project-summary-card{min-height:112px}
   .lead-filters,.designer-filters,.master-filters,.finance-filters{grid-template-columns:1fr 1fr}.designer-funnel{grid-template-columns:1fr}.photo-grid{grid-template-columns:1fr 1fr}
   dialog{width:100%;max-height:94dvh;border-radius:16px 16px 0 0}.sheethead button{min-height:44px}
 }
