@@ -22,6 +22,12 @@
   let documentCategoryFilter = '';
   let photoStageFilter = '';
   let taskView = 'overdue';
+  let designerSearch = '';
+  let designerStatusFilter = '';
+  let designerResponsibleFilter = '';
+  let designerContactFilter = '';
+  let designerView = 'list';
+  let showArchivedDesigners = false;
   const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'more']);
   const globalTabLabels = {
     home: 'Главная', projects: 'Объекты', finance: 'Финансы',
@@ -48,6 +54,9 @@
   const documentCategoryLabels = {contract:'Договор',estimate:'Смета',addendum:'Дополнительные соглашения',design:'Дизайн-проект',technical:'Техническая документация',other:'Прочее'};
   const taskStatusLabels = {new:'Новая',in_progress:'В работе',completed:'Выполнена',cancelled:'Отменена'};
   const taskPriorityLabels = {low:'Низкий',normal:'Обычный',high:'Высокий',urgent:'Срочный'};
+  const designerStatusLabels = {found:'Найден',first_contact:'Первый контакт',replied:'Ответил',meeting:'Встреча',partner:'Партнёр',referred_lead:'Передал заявку',has_project:'Есть объект',inactive:'Неактивен'};
+  const designerPriorityLabels = {low:'Низкий',normal:'Обычный',high:'Высокий'};
+  const designerInteractionLabels = {message:'Сообщение',call:'Звонок',meeting:'Встреча',note:'Заметка',other:'Другое'};
 
   const optionalValue = value => String(value || '').trim() || null;
   const projectStatusLabel = status => projectStatuses[status] || projectStatuses.active;
@@ -156,6 +165,10 @@
     return post('project-operations-api', { ...await AdmaAuth.credentials(), action, ...extra });
   }
 
+  async function designersApi(action, extra = {}) {
+    return post('designers-api', { ...await AdmaAuth.credentials(), action, ...extra });
+  }
+
   function mapProject(p) {
     return {
       id: p.id,
@@ -171,6 +184,7 @@
       actualEndDate: p.actual_end_date || '',
       contractNumber: p.contract_number || '',
       warrantyUntil: p.warranty_until || '',
+      designerId: p.designer_id || '',
     };
   }
 
@@ -216,6 +230,8 @@
   const mapProjectDocument=x=>({...x,projectId:x.project_id,filePath:x.storage_path,fileUrl:x.file_url||'',documentDate:x.document_date||'',createdAt:x.created_at,authorName:authorName(x)});
   const mapProjectTask=x=>({...x,projectId:x.project_id,stageId:x.stage_id||'',actId:x.act_id||'',waybillId:x.waybill_id||'',assigneeUserId:x.assignee_user_id||'',assigneeMasterId:x.assignee_master_id||'',createdAt:x.created_at,authorName:authorName(x)});
   const mapProjectPhoto=x=>({...x,projectId:x.project_id,stageId:x.stage_id||'',filePath:x.storage_path,fileUrl:x.file_url||'',shotDate:x.shot_date||'',createdAt:x.created_at,authorName:authorName(x)});
+  const mapDesigner=x=>({...x,fullName:x.full_name, responsibleUserId:x.responsible_user_id||'', lastContactAt:x.last_contact_at||'', nextContactAt:x.next_contact_at||'', nextAction:x.next_action||'', portfolioUrl:x.portfolio_url||'', isArchived:!!x.is_archived});
+  const mapDesignerInteraction=x=>({...x,designerId:x.designer_id,occurredAt:x.occurred_at,type:x.interaction_type,authorName:authorName(x)});
 
   async function loadFinanceCloud() {
     if (!canManageProjects()) {
@@ -235,13 +251,14 @@
   }
 
   async function loadProjectOperationsCloud(){const data=await operationsApi('load');state.projectDocuments=(data.documents||[]).map(mapProjectDocument);state.projectTasks=(data.tasks||[]).map(mapProjectTask);state.projectPhotos=(data.photos||[]).map(mapProjectPhoto)}
+  async function loadDesignersCloud(){if(!canManageProjects()){state.designers=[];state.designerInteractions=[];state.designerUsers=[];return}const data=await designersApi('load');state.designers=(data.designers||[]).map(mapDesigner);state.designerInteractions=(data.interactions||[]).map(mapDesignerInteraction);state.designerUsers=data.users||[];if(data.projects)state.projects=(data.projects||[]).map(p=>{const existing=state.projects.find(x=>x.id===p.id);return existing?{...existing,designerId:p.designer_id||''}:mapProject(p)})}
 
   async function loadCloud() {
     const data = await api('load');
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
-    await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud()]);
+    await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud()]);
     save();
     render();
     return data;
@@ -624,6 +641,7 @@
     if (!canManageProjects()) return;
     editingProjectId = null;
     projectForm.reset();
+    pDesigner.innerHTML='<option value="">Не назначен</option>'+(state.designers||[]).filter(d=>!d.isArchived).map(d=>`<option value="${esc(d.id)}">${esc(designerName(d))}${d.studio?' · '+esc(d.studio):''}</option>`).join('');
     pStatus.value = 'preparation';
     const title = projectDlg.querySelector('.sheethead h2');
     if (title) title.textContent = 'Новый объект';
@@ -636,6 +654,7 @@
     if (!p) return;
     editingProjectId = id;
     projectForm.reset();
+    pDesigner.innerHTML='<option value="">Не назначен</option>'+(state.designers||[]).filter(d=>!d.isArchived||d.id===p.designerId).map(d=>`<option value="${esc(d.id)}">${esc(designerName(d))}${d.studio?' · '+esc(d.studio):''}</option>`).join('');
     pName.value = p.name || '';
     pAddress.value = p.address || '';
     pClient.value = p.client || '';
@@ -648,6 +667,7 @@
     pActualEndDate.value = p.actualEndDate || '';
     pContract.value = p.contractNumber || '';
     pWarrantyUntil.value = p.warrantyUntil || '';
+    pDesigner.value = p.designerId || '';
     const title = projectDlg.querySelector('.sheethead h2');
     if (title) title.textContent = 'Редактировать объект';
     projectDlg.showModal();
@@ -794,9 +814,9 @@
   }
 
   function renderProjectTeam(p){
-    const assignments=(state.masterAssignments||[]).filter(x=>x.projectId===p.id&&x.status!=='cancelled').sort((a,b)=>a.startDate.localeCompare(b.startDate));const responsibles=(state.projectResponsibles||[]).filter(x=>x.project_id===p.id&&x.user?.is_active!==false);
-    $('#projectSection').innerHTML=`<div class="page-title-row"><div><h2>Команда объекта</h2><p>Ответственные и мастера, назначенные из общей базы</p></div>${canManageProjects()&&p.status!=='archived'?'<button id="addMasterAssignment" class="btn primary">+ Добавить мастера</button>':''}</div><div class="section compact"><h3>Ответственные</h3></div><section class="responsible-grid">${responsibles.length?responsibles.map(x=>`<div class="card responsible-card"><span class="master-avatar">${esc(responsibleName(x.user).slice(0,2).toUpperCase())}</span><div><small>${esc(roleLabel(x.user?.role||'foreman'))}</small><strong>${esc(responsibleName(x.user))}</strong><span>${esc(x.user?.telegram_username?'@'+String(x.user.telegram_username).replace(/^@/,''):'Контакт в профиле')}</span></div></div>`).join(''):'<div class="card empty">Ответственные пока не назначены</div>'}<div class="card responsible-card muted-card"><span class="master-avatar">✦</span><div><small>Дизайнер</small><strong>Не назначен</strong><span>Связь появится на этапе CRM дизайнеров</span></div></div></section><div class="section compact"><div><h3>Мастера</h3><p class="muted">${assignments.length} назначений</p></div></div><div class="project-team-list">${assignments.length?assignments.map(x=>{const m=(state.masters||[]).find(y=>y.id===x.masterId);return `<button class="card team-master-card" data-assignment="${esc(x.id)}"><span class="master-avatar">${esc((m?.name||'М').slice(0,2).toUpperCase())}</span><span class="grow"><strong>${esc(m?.name||'Мастер')}</strong><small>${esc(masterSpecialtyLabels[m?.primarySpecialty]||'Другое')} · ${esc(assignmentStage(x)?.name||'Объект целиком')}</small><small>${esc(assignmentPeriod(x))} · ${esc(masterContact(m||{}))}</small></span><span class="badge ${x.status==='completed'?'paid':'pending'}">${esc(assignmentStatusLabels[x.status]||x.status)}</span></button>`}).join(''):'<div class="card empty">На объект пока не назначены мастера</div>'}</div>`;
-    const add=document.getElementById('addMasterAssignment');if(add)add.onclick=()=>openAssignmentDialog(p.id);document.querySelectorAll('[data-assignment]').forEach(button=>button.onclick=()=>canManageProjects()?openAssignmentDialog(p.id,button.dataset.assignment):openMasterDetails((state.masterAssignments||[]).find(x=>x.id===button.dataset.assignment)?.masterId));
+    const assignments=(state.masterAssignments||[]).filter(x=>x.projectId===p.id&&x.status!=='cancelled').sort((a,b)=>a.startDate.localeCompare(b.startDate));const responsibles=(state.projectResponsibles||[]).filter(x=>x.project_id===p.id&&x.user?.is_active!==false),designer=(state.designers||[]).find(x=>x.id===p.designerId);
+    $('#projectSection').innerHTML=`<div class="page-title-row"><div><h2>Команда объекта</h2><p>Ответственные и мастера, назначенные из общей базы</p></div>${canManageProjects()&&p.status!=='archived'?'<button id="addMasterAssignment" class="btn primary">+ Добавить мастера</button>':''}</div><div class="section compact"><h3>Ответственные</h3></div><section class="responsible-grid">${responsibles.length?responsibles.map(x=>`<div class="card responsible-card"><span class="master-avatar">${esc(responsibleName(x.user).slice(0,2).toUpperCase())}</span><div><small>${esc(roleLabel(x.user?.role||'foreman'))}</small><strong>${esc(responsibleName(x.user))}</strong><span>${esc(x.user?.telegram_username?'@'+String(x.user.telegram_username).replace(/^@/,''):'Контакт в профиле')}</span></div></div>`).join(''):'<div class="card empty">Ответственные пока не назначены</div>'}<button class="card responsible-card muted-card" ${designer?'data-project-designer="'+esc(designer.id)+'"':''}><span class="master-avatar">✦</span><div><small>Дизайнер</small><strong>${esc(designer?designerName(designer):'Не назначен')}</strong><span>${esc(designer?(designer.studio||designer.telegram||designer.phone||'Открыть карточку'):'Назначается в настройках объекта')}</span></div></button></section><div class="section compact"><div><h3>Мастера</h3><p class="muted">${assignments.length} назначений</p></div></div><div class="project-team-list">${assignments.length?assignments.map(x=>{const m=(state.masters||[]).find(y=>y.id===x.masterId);return `<button class="card team-master-card" data-assignment="${esc(x.id)}"><span class="master-avatar">${esc((m?.name||'М').slice(0,2).toUpperCase())}</span><span class="grow"><strong>${esc(m?.name||'Мастер')}</strong><small>${esc(masterSpecialtyLabels[m?.primarySpecialty]||'Другое')} · ${esc(assignmentStage(x)?.name||'Объект целиком')}</small><small>${esc(assignmentPeriod(x))} · ${esc(masterContact(m||{}))}</small></span><span class="badge ${x.status==='completed'?'paid':'pending'}">${esc(assignmentStatusLabels[x.status]||x.status)}</span></button>`}).join(''):'<div class="card empty">На объект пока не назначены мастера</div>'}</div>`;
+    const add=document.getElementById('addMasterAssignment');if(add)add.onclick=()=>openAssignmentDialog(p.id);const designerButton=document.querySelector('[data-project-designer]');if(designerButton)designerButton.onclick=()=>openDesignerDetails(designerButton.dataset.projectDesigner);document.querySelectorAll('[data-assignment]').forEach(button=>button.onclick=()=>canManageProjects()?openAssignmentDialog(p.id,button.dataset.assignment):openMasterDetails((state.masterAssignments||[]).find(x=>x.id===button.dataset.assignment)?.masterId));
   }
 
   const actStatusLabels={draft:'Черновик',issued:'Выставлен',signed:'Подписан',partially_paid:'Частично оплачен',paid:'Оплачен'};
@@ -1354,10 +1374,47 @@
     document.getElementById('addMaster').onclick=()=>openMasterDialog();document.getElementById('masterSearch').oninput=e=>{masterSearch=e.target.value;renderMastersCloud()};document.getElementById('masterSpecialty').onchange=e=>{masterSpecialtyFilter=e.target.value;renderMastersCloud()};document.getElementById('masterAvailability').onchange=e=>{masterAvailabilityFilter=e.target.value;renderMastersCloud()};document.getElementById('toggleArchivedMasters').onclick=()=>{showArchivedMasters=!showArchivedMasters;renderMastersCloud()};document.querySelectorAll('[data-master-id]').forEach(button=>button.onclick=()=>openMasterDetails(button.dataset.masterId));
   }
 
+  const designerName=d=>d?.fullName||'Дизайнер';
+  const designerResponsible=d=>responsibleName((state.designerUsers||[]).find(x=>x.id===d.responsibleUserId));
+  const designerProjects=id=>(state.projects||[]).filter(p=>p.designerId===id);
+  const designerContactDate=value=>value?new Intl.DateTimeFormat('ru-RU',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value)):'—';
+  const localDateTime=value=>{if(!value)return'';const d=new Date(value);return Number.isNaN(d.getTime())?'':new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16)};
+  const designerOverdue=d=>!!d.nextContactAt&&d.status!=='inactive'&&new Date(d.nextContactAt).getTime()<Date.now();
+  const safeContactLink=(kind,value)=>{const raw=String(value||'').trim();if(!raw)return'';let href=raw,label=raw;if(kind==='instagram'){const handle=raw.replace(/^https?:\/\/(www\.)?instagram\.com\//i,'').replace(/^@/,'').replace(/\/$/,'');href=`https://instagram.com/${encodeURIComponent(handle)}`;label='Instagram'}else if(kind==='telegram'){const handle=raw.replace(/^https?:\/\/t\.me\//i,'').replace(/^@/,'').replace(/\/$/,'');href=`https://t.me/${encodeURIComponent(handle)}`;label='Telegram'}else if(kind==='phone'){href='tel:'+raw.replace(/[^+\d]/g,'');label=raw}else if(kind==='email'){href='mailto:'+raw;label=raw}else if(!/^https?:\/\//i.test(href))href='https://'+href;return `<a class="btn secondary" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`};
+  async function refreshDesigners(message){await loadDesignersCloud();render();if(message)banner(message,'ok')}
+
+  function openDesignerDialog(designerId=''){
+    if(!canManageProjects())return;const d=(state.designers||[]).find(x=>x.id===designerId);const users=state.designerUsers||[];
+    const dlg=dynamicDialog('designerEditDlg',d?'Редактировать дизайнера':'Новый дизайнер',`<label>Имя и фамилия<input name="fullName" required maxlength="200" value="${esc(d?.fullName||'')}"></label><div class="grid"><label>Студия<input name="studio" maxlength="200" value="${esc(d?.studio||'')}"></label><label>Город<input name="city" maxlength="160" value="${esc(d?.city||'')}"></label></div><div class="grid"><label>Instagram<input name="instagram" maxlength="300" placeholder="@username" value="${esc(d?.instagram||'')}"></label><label>Telegram<input name="telegram" maxlength="200" placeholder="@username" value="${esc(d?.telegram||'')}"></label></div><div class="grid"><label>Телефон<input name="phone" type="tel" maxlength="80" value="${esc(d?.phone||'')}"></label><label>Email<input name="email" type="email" maxlength="240" value="${esc(d?.email||'')}"></label></div><div class="grid"><label>Сайт<input name="website" maxlength="500" value="${esc(d?.website||'')}"></label><label>Портфолио<input name="portfolio" maxlength="500" value="${esc(d?.portfolioUrl||'')}"></label></div><div class="grid"><label>Статус<select name="status">${Object.entries(designerStatusLabels).map(([v,l])=>`<option value="${v}" ${d?.status===v?'selected':''}>${l}</option>`).join('')}</select></label><label>Приоритет<select name="priority">${Object.entries(designerPriorityLabels).map(([v,l])=>`<option value="${v}" ${(d?.priority||'normal')===v?'selected':''}>${l}</option>`).join('')}</select></label></div><label>Ответственный<select name="responsible"><option value="">Не назначен</option>${users.map(u=>`<option value="${esc(u.id)}" ${d?.responsibleUserId===u.id?'selected':''}>${esc(responsibleName(u))}</option>`).join('')}</select></label><div class="grid"><label>Следующий контакт<input name="nextContact" type="datetime-local" value="${esc(localDateTime(d?.nextContactAt))}"></label><label>Следующее действие<input name="nextAction" maxlength="1000" value="${esc(d?.nextAction||'')}"></label></div><div class="grid"><label>Источник<input name="source" maxlength="200" value="${esc(d?.source||'')}"></label><label>Теги<input name="tags" maxlength="500" placeholder="премиум, Москва" value="${esc((d?.tags||[]).join(', '))}"></label></div><label>Заметки<textarea name="notes" rows="4" maxlength="5000">${esc(d?.notes||'')}</textarea></label>${d?`<button type="button" class="btn ${d.isArchived?'secondary':'danger'} full-button" data-designer-archive>${d.isArchived?'Вернуть в работу':'Архивировать'}</button>`:''}`);
+    const payload=form=>({id:d?.id,full_name:form.elements.fullName.value,studio:form.elements.studio.value,city:form.elements.city.value,instagram:form.elements.instagram.value,telegram:form.elements.telegram.value,phone:form.elements.phone.value,email:form.elements.email.value,website:form.elements.website.value,portfolio_url:form.elements.portfolio.value,status:form.elements.status.value,priority:form.elements.priority.value,responsible_user_id:form.elements.responsible.value||null,next_contact_at:form.elements.nextContact.value?new Date(form.elements.nextContact.value).toISOString():null,next_action:form.elements.nextAction.value,source:form.elements.source.value,tags:form.elements.tags.value.split(',').map(x=>x.trim()).filter(Boolean),notes:form.elements.notes.value});
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{try{await designersApi('save_designer',{designer:payload(form)})}catch(e){if(e.message!=='possible_duplicate')throw e;if(!confirm('Похожий дизайнер уже есть в базе. Всё равно сохранить отдельную карточку?'))return;await designersApi('save_designer',{designer:payload(form),allow_duplicate:true})}dlg.close();await refreshDesigners(d?'Дизайнер обновлён':'Дизайнер добавлен')}catch(e){banner('Не удалось сохранить дизайнера: '+e.message,'error')}finally{button.disabled=false}};
+    const archive=dlg.querySelector('[data-designer-archive]');if(archive)archive.onclick=async()=>{if(!confirm(d.isArchived?'Вернуть дизайнера в работу?':'Архивировать дизайнера? Связи с объектами и история сохранятся.'))return;try{await designersApi('archive_designer',{id:d.id,archived:!d.isArchived});dlg.close();await refreshDesigners(d.isArchived?'Дизайнер восстановлен':'Дизайнер архивирован')}catch(e){banner('Не удалось изменить статус: '+e.message,'error')}};dlg.showModal();
+  }
+
+  function openDesignerInteractionDialog(designerId){
+    const dlg=dynamicDialog('designerInteractionDlg','Добавить взаимодействие',`<div class="grid"><label>Тип<select name="type">${Object.entries(designerInteractionLabels).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label><label>Дата и время<input name="occurred" type="datetime-local" required value="${esc(localDateTime(new Date().toISOString()))}"></label></div><label>Направление<select name="direction"><option value="">Не указано</option><option value="outgoing">Исходящее</option><option value="incoming">Входящее</option></select></label><label>Комментарий<textarea name="comment" rows="4" required maxlength="3000"></textarea></label><label>Результат<input name="result" maxlength="1000"></label>`);dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{await designersApi('add_interaction',{interaction:{designer_id:designerId,interaction_type:form.elements.type.value,occurred_at:new Date(form.elements.occurred.value).toISOString(),direction:form.elements.direction.value||null,comment:form.elements.comment.value,result:form.elements.result.value}});dlg.close();await refreshDesigners('Взаимодействие добавлено');openDesignerDetails(designerId)}catch(e){banner('Не удалось добавить взаимодействие: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal();
+  }
+
+  function openDesignerDetails(designerId){
+    const d=(state.designers||[]).find(x=>x.id===designerId);if(!d)return;const interactions=(state.designerInteractions||[]).filter(x=>x.designerId===d.id).sort((a,b)=>b.occurredAt.localeCompare(a.occurredAt)),projects=designerProjects(d.id);let dlg=document.getElementById('designerDetailsDlg');if(!dlg){dlg=document.createElement('dialog');dlg.id='designerDetailsDlg';document.body.appendChild(dlg)}
+    const links=[safeContactLink('instagram',d.instagram),safeContactLink('telegram',d.telegram),safeContactLink('phone',d.phone),safeContactLink('email',d.email),safeContactLink('website',d.website||d.portfolioUrl)].filter(Boolean).join('');
+    dlg.innerHTML=`<div class="dialog-body"><div class="sheethead"><button type="button" data-close>Закрыть</button><h2>${esc(designerName(d))}</h2><button class="btn secondary" data-edit>Изменить</button></div><div class="designer-profile"><div><span class="badge ${designerOverdue(d)?'danger':d.status==='partner'||d.status==='has_project'?'paid':'pending'}">${esc(designerStatusLabels[d.status]||d.status)}</span><h3>${esc(d.studio||'Без студии')}</h3><p>${esc([d.city,d.source].filter(Boolean).join(' · ')||'Контактные данные')}</p></div><div class="designer-contact-links">${links||'<span class="muted">Контакты не указаны</span>'}</div><dl class="object-details"><div><dt>Ответственный</dt><dd>${esc(d.responsibleUserId?designerResponsible(d):'Не назначен')}</dd></div><div><dt>Последний контакт</dt><dd>${esc(designerContactDate(d.lastContactAt))}</dd></div><div><dt>Следующий контакт</dt><dd class="${designerOverdue(d)?'danger-text':''}">${esc(designerContactDate(d.nextContactAt))}</dd></div><div><dt>Следующее действие</dt><dd>${esc(d.nextAction||'—')}</dd></div></dl>${d.notes?`<div class="master-notes">${esc(d.notes)}</div>`:''}</div><div class="section compact"><h3>Объекты</h3></div><div class="designer-projects">${projects.length?projects.map(p=>`<button class="card" data-designer-project="${esc(p.id)}"><strong>${esc(p.name)}</strong><small>${esc(projectStatusLabel(p.status))}</small></button>`).join(''):'<div class="empty">Связанных объектов пока нет</div>'}</div><div class="section compact"><h3>История взаимодействий</h3><button class="btn primary" data-add-interaction>+ Запись</button></div><div class="designer-history">${interactions.length?interactions.map(x=>`<div class="card"><span class="designer-history-icon">${x.type==='call'?'☎':x.type==='meeting'?'◎':x.type==='message'?'✉':'•'}</span><span class="grow"><strong>${esc(designerInteractionLabels[x.type]||x.type)}</strong><small>${esc(designerContactDate(x.occurredAt))} · ${esc(x.authorName)}</small><p>${esc(x.comment)}</p>${x.result?`<small>Результат: ${esc(x.result)}</small>`:''}</span></div>`).join(''):'<div class="empty">История пока пуста</div>'}</div></div>`;
+    dlg.querySelector('[data-close]').onclick=()=>dlg.close();dlg.querySelector('[data-edit]').onclick=()=>{dlg.close();openDesignerDialog(d.id)};dlg.querySelector('[data-add-interaction]').onclick=()=>{dlg.close();openDesignerInteractionDialog(d.id)};dlg.querySelectorAll('[data-designer-project]').forEach(b=>b.onclick=()=>{dlg.close();navigateProject(b.dataset.designerProject)});dlg.showModal();
+  }
+
+  function renderDesignersCloud(){
+    if(!canManageProjects()){$('#app').innerHTML=`${pageHeader('ADMA · ДИЗАЙНЕРЫ','Дизайнеры','CRM доступна владельцу и партнёру')}${moduleScreen('✦','Доступ ограничен','Работа с партнёрской базой доступна владельцу и партнёру.','Дизайнер → Объект')}`;return}
+    const today=new Date().toISOString().slice(0,10),all=(state.designers||[]).filter(d=>showArchivedDesigners?d.isArchived:!d.isArchived);const filtered=all.filter(d=>{const search=[d.fullName,d.studio,d.instagram,d.telegram,d.phone,d.email,d.city,...(d.tags||[])].join(' ').toLowerCase();const day=d.nextContactAt?d.nextContactAt.slice(0,10):'';const contactOk=!designerContactFilter||(designerContactFilter==='overdue'?designerOverdue(d):designerContactFilter==='today'?day===today:designerContactFilter==='planned'?day>=today:false);return(!designerSearch||search.includes(designerSearch.toLowerCase()))&&(!designerStatusFilter||d.status===designerStatusFilter)&&(!designerResponsibleFilter||d.responsibleUserId===designerResponsibleFilter)&&contactOk});
+    const card=d=>`<button class="card designer-card ${designerOverdue(d)?'overdue':''}" data-designer-id="${esc(d.id)}"><span class="master-avatar">${esc(designerName(d).slice(0,2).toUpperCase())}</span><span class="grow"><strong>${esc(designerName(d))}</strong><small>${esc(d.studio||d.city||'Без студии')} · ${esc(d.instagram||d.telegram||d.phone||'контакт не указан')}</small><small>${esc(d.nextAction||'Следующее действие не задано')}</small></span><span><span class="badge ${designerOverdue(d)?'danger':d.status==='partner'||d.status==='has_project'?'paid':'pending'}">${esc(designerStatusLabels[d.status]||d.status)}</span><small class="designer-next ${designerOverdue(d)?'danger-text':''}">${esc(d.nextContactAt?designerContactDate(d.nextContactAt):'Без даты')}</small></span></button>`;
+    $('#app').innerHTML=`${pageHeader('ADMA · ПАРТНЁРЫ','Дизайнеры','Единая CRM контактов, договорённостей и связанных объектов','<button id="addDesigner" class="btn primary">+ Дизайнер</button>')}<section class="card designer-filters"><label>Поиск<input id="designerSearch" type="search" placeholder="Имя, студия, контакт" value="${esc(designerSearch)}"></label><label>Статус<select id="designerStatus"><option value="">Все статусы</option>${Object.entries(designerStatusLabels).map(([v,l])=>`<option value="${v}" ${designerStatusFilter===v?'selected':''}>${l}</option>`).join('')}</select></label><label>Ответственный<select id="designerResponsible"><option value="">Все ответственные</option>${(state.designerUsers||[]).map(u=>`<option value="${esc(u.id)}" ${designerResponsibleFilter===u.id?'selected':''}>${esc(responsibleName(u))}</option>`).join('')}</select></label><label>Контакт<select id="designerContact"><option value="">Любая дата</option><option value="overdue" ${designerContactFilter==='overdue'?'selected':''}>Просрочен</option><option value="today" ${designerContactFilter==='today'?'selected':''}>Сегодня</option><option value="planned" ${designerContactFilter==='planned'?'selected':''}>Запланирован</option></select></label><div class="designer-view-buttons"><button id="designerListView" class="btn ${designerView==='list'?'primary':'secondary'}">Список</button><button id="designerFunnelView" class="btn ${designerView==='funnel'?'primary':'secondary'}">Воронка</button><button id="toggleArchivedDesigners" class="btn secondary">${showArchivedDesigners?'Активные':'Архив'}</button></div></section>${designerView==='funnel'?`<div class="designer-funnel">${Object.entries(designerStatusLabels).filter(([v])=>v!=='inactive').map(([v,l])=>{const items=filtered.filter(d=>d.status===v);return `<section class="designer-column"><div class="section compact"><h3>${esc(l)}</h3><span class="badge neutral">${items.length}</span></div>${items.map(card).join('')||'<div class="empty">Пусто</div>'}</section>`}).join('')}</div>`:`<div class="designer-list">${filtered.map(card).join('')||'<div class="card empty">Дизайнеры по фильтру не найдены</div>'}</div>`}`;
+    document.getElementById('addDesigner').onclick=()=>openDesignerDialog();document.getElementById('designerSearch').oninput=e=>{designerSearch=e.target.value;renderDesignersCloud()};document.getElementById('designerStatus').onchange=e=>{designerStatusFilter=e.target.value;renderDesignersCloud()};document.getElementById('designerResponsible').onchange=e=>{designerResponsibleFilter=e.target.value;renderDesignersCloud()};document.getElementById('designerContact').onchange=e=>{designerContactFilter=e.target.value;renderDesignersCloud()};document.getElementById('designerListView').onclick=()=>{designerView='list';renderDesignersCloud()};document.getElementById('designerFunnelView').onclick=()=>{designerView='funnel';renderDesignersCloud()};document.getElementById('toggleArchivedDesigners').onclick=()=>{showArchivedDesigners=!showArchivedDesigners;renderDesignersCloud()};document.querySelectorAll('[data-designer-id]').forEach(b=>b.onclick=()=>openDesignerDetails(b.dataset.designerId));
+  }
+
   function renderFallbackCloud() {
     if (state.tab === 'finance') return renderGlobalFinanceCloud();
     if (state.tab === 'masters') return renderMastersCloud();
-    if (['leads', 'designers'].includes(state.tab)) return renderFutureModuleCloud(state.tab);
+    if (state.tab === 'designers') return renderDesignersCloud();
+    if (state.tab === 'leads') return renderFutureModuleCloud(state.tab);
     return renderMoreCloud();
   }
 
@@ -1444,6 +1501,7 @@
           actual_end_date: optionalValue(pActualEndDate.value),
           contract_number: optionalValue(pContract.value),
           warranty_until: optionalValue(pWarrantyUntil.value),
+          designer_id: optionalValue(pDesigner.value),
         };
         banner(editingProjectId ? 'Сохраняю изменения объекта…' : 'Сохраняю объект…');
         if (editingProjectId) await api('update_project', { project: { id: editingProjectId, ...project } });
@@ -1649,7 +1707,7 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       state.stages = (cloud.stages || []).map(mapStage);
-      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud()]);
+      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud()]);
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();
