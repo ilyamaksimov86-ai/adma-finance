@@ -27,7 +27,7 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api','leads-api']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
  }
@@ -40,6 +40,11 @@ test('foreman cannot mutate the global master directory',async()=>{
 test('foreman cannot load or mutate the designers CRM',async()=>{
  for(const body of [{action:'load'},{action:'save_designer',designer:{}},{action:'add_interaction',interaction:{}}]){
   const r=await handler('designers-api',{},actor)(request(body));assert.equal(r.status,403);
+ }
+});
+test('foreman cannot load, mutate or convert leads',async()=>{
+ for(const body of [{action:'load'},{action:'save_lead',lead:{}},{action:'convert_lead',lead_id:'test'}]){
+  const r=await handler('leads-api',{},actor)(request(body));assert.equal(r.status,403);
  }
 });
 test('foreman cannot load or mutate profit data',async()=>{
