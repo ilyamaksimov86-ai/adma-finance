@@ -1,0 +1,93 @@
+{
+  "$schema": "./api-contracts.schema.json",
+  "version": 1,
+  "compatibility": "Existing action names and response fields are stable. Changes are additive unless a versioned endpoint is introduced.",
+  "errors": {
+    "shape": { "error": "string", "details": "object|null", "cleanup_pending": "boolean|undefined" },
+    "rule": "Clients handle error as a stable code and ignore unknown additive fields."
+  },
+  "endpoints": {
+    "adma-api": {
+      "transport": "json-command",
+      "actions": {
+        "load": { "request": [], "response": ["ok", "current_user", "projects", "expenses", "stages"] },
+        "list_users": { "request": [], "response": ["ok", "users"] },
+        "set_project_members": { "request": ["project_id", "user_ids"], "response": ["ok"] },
+        "update_user_access": { "request": ["user_id", "role", "is_active"], "response": ["ok", "user"] },
+        "create_project": { "request": ["project"], "response": ["ok", "project"] },
+        "update_project": { "request": ["project.id", "project"], "response": ["ok", "project"] },
+        "create_stage": { "request": ["stage.project_id", "stage"], "response": ["ok", "stage"] },
+        "update_stage": { "request": ["stage.id", "stage"], "response": ["ok", "stage"] },
+        "delete_stage": { "request": ["id"], "response": ["ok"] },
+        "create_expense": { "request": ["expense.project_id", "expense.amount", "expense.expense_date"], "response": ["ok", "expense"] },
+        "update_expense": { "request": ["expense.id", "expense"], "response": ["ok", "expense", "cleanup_pending?"] },
+        "mark_reimbursed": { "request": ["id"], "response": ["ok", "expense"] },
+        "delete_expense": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
+        "sign_receipt": { "request": ["ext"], "response": ["ok", "path", "token"] },
+        "upload_receipt": { "request": ["data_url"], "response": ["ok", "path", "url"] }
+      }
+    },
+    "finance-api": {
+      "transport": "json-command",
+      "actions": {
+        "load": { "request": [], "response": ["ok", "acts", "act_costs", "act_payments", "waybills", "waybill_payments", "company_expenses"] },
+        "save_act": { "request": ["act"], "response": ["ok", "act"] },
+        "delete_act": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
+        "add_act_cost": { "request": ["act_id", "date", "amount"], "response": ["ok", "item"] },
+        "add_act_payment": { "request": ["act_id", "date", "amount"], "response": ["ok", "item"] },
+        "delete_act_cost": { "request": ["id"], "response": ["ok"] },
+        "delete_act_payment": { "request": ["id"], "response": ["ok"] },
+        "save_waybill": { "request": ["waybill"], "response": ["ok", "waybill"] },
+        "delete_waybill": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
+        "add_waybill_payment": { "request": ["waybill_id", "date", "amount"], "response": ["ok", "item"] },
+        "delete_waybill_payment": { "request": ["id"], "response": ["ok"] },
+        "save_company_expense": { "request": ["expense"], "response": ["ok", "expense"] },
+        "delete_company_expense": { "request": ["id"], "response": ["ok", "cleanup_pending?"] }
+      }
+    },
+    "masters-api": {
+      "transport": "json-command",
+      "actions": {
+        "load": { "request": [], "response": ["ok", "masters", "assignments", "project_responsibles"] },
+        "save_master": { "request": ["master"], "response": ["ok", "master"] },
+        "set_master_archived": { "request": ["id", "archived"], "response": ["ok", "master"] },
+        "save_assignment": { "request": ["assignment"], "response": ["ok", "assignment", "conflicts"] },
+        "cancel_assignment": { "request": ["id"], "response": ["ok", "assignment"] }
+      }
+    },
+    "project-operations-api": {
+      "transport": "json-command",
+      "actions": {
+        "load": { "request": [], "response": ["ok", "documents", "tasks", "photos"] },
+        "save_document": { "request": ["document"], "response": ["ok", "document"] },
+        "delete_document": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
+        "save_task": { "request": ["task"], "response": ["ok", "task"] },
+        "delete_task": { "request": ["id"], "response": ["ok"] },
+        "save_photo": { "request": ["photo"], "response": ["ok", "photo"] },
+        "delete_photo": { "request": ["id"], "response": ["ok", "cleanup_pending?"] }
+      }
+    },
+    "designers-api": {
+      "transport": "json-command",
+      "actions": {
+        "load": { "request": [], "response": ["ok", "designers", "interactions", "users", "projects"] },
+        "save_designer": { "request": ["designer"], "response": ["ok", "designer"] },
+        "archive_designer": { "request": ["id", "archived"], "response": ["ok", "designer"] },
+        "add_interaction": { "request": ["interaction"], "response": ["ok", "interaction"] }
+      }
+    },
+    "leads-api": {
+      "transport": "json-command",
+      "actions": {
+        "load": { "request": [], "response": ["ok", "leads", "interactions", "users"] },
+        "save_lead": { "request": ["lead"], "response": ["ok", "lead", "duplicates"] },
+        "add_interaction": { "request": ["interaction"], "response": ["ok", "interaction"] },
+        "convert_lead": { "request": ["lead_id", "project"], "response": ["ok", "lead", "project"] }
+      }
+    },
+    "receipt-upload": { "transport": "multipart", "request": ["auth credentials", "file"], "response": ["ok", "path", "url"] },
+    "finance-file-upload": { "transport": "multipart", "request": ["auth credentials", "entity", "file"], "response": ["ok", "path", "url"] },
+    "project-file-upload": { "transport": "multipart", "request": ["auth credentials", "project_id", "kind", "file"], "response": ["ok", "record"] },
+    "reimbursement-pdf": { "transport": "json-or-text", "request": ["auth credentials", "project_id", "expense_ids?"], "response": ["PDF binary"] }
+  }
+}
