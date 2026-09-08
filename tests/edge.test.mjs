@@ -27,7 +27,7 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api','leads-api']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api','leads-api','storage-cleanup']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
  }

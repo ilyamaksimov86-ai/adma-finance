@@ -47,8 +47,9 @@ test('cross-project links and canonical assignees are enforced in API',()=>{
 
 test('file bytes use private Storage with cleanup handling',()=>{
  assert.match(uploadSource,/storage\.from\('project-files'\)\.upload/);
- assert.match(uploadSource,/if\(error\)\{await db\.storage\.from\('project-files'\)\.remove/);
- assert.match(apiSource,/cleanup_pending:!!storageError/);
+ assert.match(uploadSource,/removeStorageObject\(db,'project-files',path\)/);
+ assert.match(apiSource,/removeStorageObject\(db,'project-files',old\.storage_path\)/);
+ assert.match(apiSource,/cleanup_pending:cleanupPending/);
  assert.match(apiSource,/createSignedUrl\(row\.storage_path,3600\)/);
 });
 

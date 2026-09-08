@@ -1,4 +1,5 @@
 import { requireUser, AuthError } from '../_shared/auth.mjs';
+import { removeStorageObject } from '../_shared/storage-cleanup.mjs';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 
@@ -118,13 +119,13 @@ Deno.serve(async req=>{
       const e=body.expense||{};if(!e.id)return json({error:"id_required"},400);const {data:old,error:oldErr}=await db.from("expenses").select("project_id,receipt_path,paid_by,reimbursement_required,reimbursed").eq("id",e.id).single();if(oldErr)throw oldErr;if(!(await canAccessProject(old.project_id)))return json({error:"forbidden"},403);if(e.project_id&&!(await canAccessProject(e.project_id)))return json({error:"forbidden"},403);
       const patch:any={updated_at:new Date().toISOString()};for(const k of ["project_id","amount","expense_date","category","supplier","paid_by","reimbursement_required","reimbursed","comment","receipt_path"])if(k in e)patch[k]=e[k];if("amount" in patch){patch.amount=Number(patch.amount);if(!Number.isFinite(patch.amount)||patch.amount<=0)return json({error:"amount_must_be_positive"},400)}
       const finalPaidBy=("paid_by" in patch?(patch.paid_by==="client"?"client":"adma"):old.paid_by);patch.paid_by=finalPaidBy;const requestedReq=("reimbursement_required" in patch?!!patch.reimbursement_required:!!old.reimbursement_required);const finalReq=finalPaidBy==="adma"&&requestedReq;patch.reimbursement_required=finalReq;const requestedReimb=("reimbursed" in patch?!!patch.reimbursed:!!old.reimbursed);const finalReimb=finalReq&&requestedReimb;patch.reimbursed=finalReimb;patch.reimbursed_at=finalReimb?new Date().toISOString():null;
-      const {data,error}=await db.from("expenses").update(patch).eq("id",e.id).select("*").single();if(error)throw error;if(old.receipt_path&&("receipt_path" in patch)&&old.receipt_path!==patch.receipt_path)await db.storage.from("receipts").remove([old.receipt_path]);return json({ok:true,expense:data});
+      const {data,error}=await db.from("expenses").update(patch).eq("id",e.id).select("*").single();if(error)throw error;const cleanup_pending=old.receipt_path&&("receipt_path" in patch)&&old.receipt_path!==patch.receipt_path?await removeStorageObject(db,"receipts",old.receipt_path):false;return json({ok:true,expense:data,cleanup_pending});
     }
     if(action==="mark_reimbursed"){
       const id=String(body.id||"");const {data:old,error:oldErr}=await db.from("expenses").select("project_id,paid_by,reimbursement_required").eq("id",id).single();if(oldErr)throw oldErr;if(!(await canAccessProject(old.project_id)))return json({error:"forbidden"},403);if(old.paid_by!=="adma"||!old.reimbursement_required)return json({error:"not_reimbursable"},400);const {data,error}=await db.from("expenses").update({reimbursed:true,reimbursed_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",id).select("*").single();if(error)throw error;return json({ok:true,expense:data});
     }
     if(action==="delete_expense"){
-      const id=String(body.id||"");const {data:old,error:oldErr}=await db.from("expenses").select("project_id,receipt_path").eq("id",id).single();if(oldErr)throw oldErr;if(!(await canAccessProject(old.project_id)))return json({error:"forbidden"},403);const {error}=await db.from("expenses").delete().eq("id",id);if(error)throw error;if(old.receipt_path)await db.storage.from("receipts").remove([old.receipt_path]);return json({ok:true});
+      const id=String(body.id||"");const {data:old,error:oldErr}=await db.from("expenses").select("project_id,receipt_path").eq("id",id).single();if(oldErr)throw oldErr;if(!(await canAccessProject(old.project_id)))return json({error:"forbidden"},403);const {error}=await db.from("expenses").delete().eq("id",id);if(error)throw error;const cleanup_pending=await removeStorageObject(db,"receipts",old.receipt_path);return json({ok:true,cleanup_pending});
     }
     return json({error:"unknown_action"},400);
   }catch(e){const message=e instanceof Error?e.message:"unknown_error";const authErrors=["missing_hash","bad_signature","expired_init_data","missing_user"];return json({error:message},e instanceof AuthError?e.status:authErrors.includes(message)?401:500)}
