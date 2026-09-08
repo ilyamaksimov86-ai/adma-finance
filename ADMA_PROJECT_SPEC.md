@@ -222,8 +222,8 @@ API payloads и форматы ошибок должны быть стабиль
 | Задачи объекта | included | Простой операционный task manager |
 | Фото объекта | included | Приватное хранение, связь с объектом/этапом |
 | CRM Дизайнеров | included | Этап 7 завершён; связь с объектами через `projects.designer_id` |
-| CRM Заявок | in_progress | Этап 8 |
-| Финальный агрегированный Dashboard | deferred | Этап 10, после Заявок |
+| CRM Заявок | included | Этап 8 завершён; Designer → Lead → Project |
+| Финальный агрегированный Dashboard | in_progress | Следующий этап 10 |
 | Нативное iOS/Android приложение | deferred | Будущий отдельный клиент к существующему backend/API |
 | Push-уведомления | deferred | Реализовывать только при отдельной задаче |
 | Background cleanup orphan-файлов | deferred | Небольшой технический maintenance-этап; использовать текущую инфраструктуру |
