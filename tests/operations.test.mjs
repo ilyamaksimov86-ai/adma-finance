@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 
 const migration=readFileSync(new URL('../supabase/migrations/20260908090000_add_project_operations_stage6.sql',import.meta.url),'utf8');
+const indexMigration=readFileSync(new URL('../supabase/migrations/20260908091000_add_project_photos_stage_index.sql',import.meta.url),'utf8');
 const apiSource=readFileSync(new URL('../supabase/functions/project-operations-api/index.ts',import.meta.url),'utf8');
 const uploadSource=readFileSync(new URL('../supabase/functions/project-file-upload/index.ts',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../cloud.js',import.meta.url),'utf8');
@@ -21,7 +22,9 @@ test('stage 6 migration is additive, private and project-scoped',()=>{
  }
  assert.match(migration,/values \('project-files','project-files',false,10485760/);
  assert.match(migration,/stage_id uuid references public\.project_stages\(id\) on delete set null/);
+ assert.match(indexMigration,/create index if not exists idx_project_photos_stage on public\.project_photos\(stage_id\)/);
  assert.doesNotMatch(migration,/drop\s+(table|column)|truncate|delete\s+from/i);
+ assert.doesNotMatch(indexMigration,/drop\s+(table|column)|truncate|delete\s+from/i);
 });
 
 test('documents, tasks and photos validate canonical metadata',()=>{
