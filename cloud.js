@@ -652,7 +652,7 @@
       button.onclick = () => navigateGlobal(button.dataset.sideTab);
     });
     document.querySelectorAll('.tabs [data-tab]').forEach(button => {
-      const mobileTab = ['leads', 'designers', 'masters'].includes(state.tab) ? 'more' : state.tab;
+      const mobileTab = ['designers', 'masters'].includes(state.tab) ? 'more' : state.tab;
       button.classList.toggle('active', state.project ? button.dataset.tab === 'projects' : button.dataset.tab === mobileTab);
       button.onclick = () => navigateGlobal(button.dataset.tab);
     });
