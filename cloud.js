@@ -37,6 +37,8 @@
   let leadCreatedFrom = '';
   let leadCreatedTo = '';
   let leadView = 'list';
+  let dashboardPeriod = new Date().toISOString().slice(0, 7);
+  let dashboardLoadErrors = [];
   const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'more']);
   const globalTabLabels = {
     home: 'Главная', projects: 'Объекты', finance: 'Финансы',
@@ -278,9 +280,12 @@
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
-    await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud(),loadLeadsCloud()]);
+    const modules=[['Финансы',loadFinanceCloud],['Команда',loadMastersCloud],['Задачи и файлы',loadProjectOperationsCloud],['Дизайнеры',loadDesignersCloud],['Заявки',loadLeadsCloud]];
+    const results=await Promise.allSettled(modules.map(([,load])=>load()));
+    dashboardLoadErrors=results.flatMap((result,index)=>result.status==='rejected'?[modules[index][0]]:[]);
     save();
     render();
+    if(dashboardLoadErrors.length)banner(`Не загрузились: ${dashboardLoadErrors.join(', ')}. Остальные данные доступны.`,'error');
     return data;
   }
 
@@ -520,16 +525,19 @@
   const actProfit = act => numeric(act.amount) - actCost(act.id);
   const waybillPaid = waybillId => totalAmounts(waybillPaymentsFor(waybillId));
   const waybillProfit = waybill => numeric(waybill.amount) - waybillPaid(waybill.id);
-  function projectFinanceTotals(projectId) {
-    const acts=actsFor(projectId),waybills=waybillsFor(projectId);
+  const inMonth = (value, month) => !month || String(value || '').slice(0, 7) === month;
+  function projectFinanceTotals(projectId, month = '') {
+    const acts=actsFor(projectId).filter(x=>inMonth(x.date,month)),waybills=waybillsFor(projectId).filter(x=>inMonth(x.date,month));
     const actsAmount=totalAmounts(acts),actsProfit=acts.reduce((s,x)=>s+actProfit(x),0);
     const waybillsAmount=totalAmounts(waybills),waybillsProfit=waybills.reduce((s,x)=>s+waybillProfit(x),0);
-    return {actsAmount,actsProfit,waybillsAmount,waybillsProfit,checks:spent(projectId),due:due(projectId),profit:actsProfit+waybillsProfit};
+    const checks=(state.expenses||[]).filter(x=>x.projectId===projectId&&inMonth(x.date,month));
+    return {actsAmount,actsProfit,waybillsAmount,waybillsProfit,checks:totalAmounts(checks),due:totalAmounts(checks.filter(pending)),profit:actsProfit+waybillsProfit};
   }
-  function companyFinanceTotals() {
-    const objectProfit=(state.projects||[]).reduce((s,p)=>s+projectFinanceTotals(p.id).profit,0);
-    const general=totalAmounts(state.companyExpenses||[]);
-    return {objectProfit,general,due:due(),profit:objectProfit-general};
+  function companyFinanceTotals(month = '') {
+    const objectProfit=(state.projects||[]).reduce((s,p)=>s+projectFinanceTotals(p.id,month).profit,0);
+    const general=totalAmounts((state.companyExpenses||[]).filter(x=>inMonth(x.date,month)));
+    const dueTotal=totalAmounts((state.expenses||[]).filter(x=>pending(x)&&inMonth(x.date,month)));
+    return {objectProfit,general,due:dueTotal,profit:objectProfit-general};
   }
 
   function activeProjects() {
@@ -712,21 +720,47 @@
   }
 
   function renderHomeCloud() {
-    const m = new Date().toISOString().slice(0, 7);
-    const month = sum(state.expenses.filter(e => e.date.startsWith(m)));
-    const recent = [...state.expenses].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    if (!canManageProjects()) {
+      $('#app').innerHTML=`${pageHeader('ADMA · ОБЗОР','Главная','Операционный Dashboard доступен владельцу и партнёру')}${moduleScreen('⌂','Доступ ограничен','Финансовые и CRM-агрегаты Главной доступны административным ролям.','Объекты остаются доступны через основное меню')}`;
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const monthLabel = new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'}).format(new Date(`${dashboardPeriod}-01T12:00:00`));
     const projects = activeProjects();
-    const delayed = projects.flatMap(project => scheduleSummary(project.id).delayed.map(stage => ({ project, stage })));
-    const pendingItems = state.expenses.filter(pending).slice(0, 4);
-    const attention = [
-      ...delayed.map(({project, stage}) => `<button class="attention-item" data-open-project="${esc(project.id)}" data-section="schedule"><span class="attention-icon">!</span><span class="grow"><strong>${esc(project.name)} · ${esc(stage.name)}</strong><span>${esc(delayLabel(scheduleSummary(project.id)))}</span></span></button>`),
-      ...pendingItems.map(expense => `<button class="attention-item" data-open-project="${esc(expense.projectId)}" data-section="finance"><span class="attention-icon">₽</span><span class="grow"><strong>Компенсировать · ${money(expense.amount)}</strong><span>${esc(proj(expense.projectId)?.name || '')} · ${esc(expense.supplier || expense.category)}</span></span></button>`),
-    ];
-    $('#app').innerHTML = `${pageHeader('ADMA · ОБЗОР', 'Главная', 'Состояние объектов и вопросы, которые требуют внимания', canManageProjects() ? '<button id="homeAddProject" class="btn primary">+ Объект</button>' : '')}<section class="dashboard-metrics"><button class="card dashboard-metric" data-home-tab="projects"><small>Активные объекты</small><strong>${projects.length}</strong><span>${projects.filter(p => scheduleSummary(p.id).current).length} сейчас в работе</span></button><div class="card dashboard-metric"><small>Расходы за месяц</small><strong>${money(month)}</strong><span>Чеки / разное</span></div><div class="card dashboard-metric"><small>Компенсировано</small><strong>${money(reimb())}</strong><span>Возвращено заказчиками</span></div><button class="card dashboard-metric featured" data-home-tab="finance"><small>К компенсации</small><strong>${money(due())}</strong><span>${state.expenses.filter(pending).length} незакрытых расходов</span></button></section><section class="dashboard-columns"><div class="card panel-card"><div class="section compact"><h2>Объекты</h2><button class="btn secondary" data-home-tab="projects">Все объекты →</button></div><div class="activity-list">${projects.length ? projects.map(project => { const summary = scheduleSummary(project.id); return `<button class="activity-item" data-open-project="${esc(project.id)}"><span class="status-dot ${summary.delay ? 'critical' : summary.stages.length ? '' : 'warn'}"></span><span class="grow"><strong>${esc(project.name)} · ${summary.progress}%</strong><span>${esc(summary.current?.name || delayLabel(summary))}</span></span><strong>${esc(summary.delay ? `−${summary.delay} дн.` : summary.stages.length ? 'По плану' : 'Нет графика')}</strong></button>`; }).join('') : '<div class="empty">Активных объектов пока нет</div>'}</div></div><div class="card panel-card"><div class="section compact"><h2>Требует внимания</h2><span class="badge ${attention.length ? 'pending' : 'paid'}">${attention.length}</span></div><div class="attention-list">${attention.length ? attention.join('') : '<div class="empty">Сейчас всё спокойно</div>'}</div></div></section><section class="card panel-card"><div class="section compact"><h2>Последние операции</h2></div><div id="list"></div></section>`;
-    renderExpenses(recent, $('#list'));
+    const finance = companyFinanceTotals(dashboardPeriod);
+    const overdueDays = value => Math.max(1,daysBetween(String(value||'').slice(0,10),today));
+    const taskOwner = task => taskAssigneeLabel(task)==='Не назначен'?'':taskAssigneeLabel(task);
+    const attentions=[];
+    projects.forEach(project=>{
+      const summary=scheduleSummary(project.id);
+      summary.delayed.forEach(stage=>attentions.push({priority:2,days:stage.plannedEnd?overdueDays(stage.plannedEnd):1,icon:'!',title:`Этап «${stage.name}» задерживается`,detail:`${project.name} · ${delayLabel(summary)}`,projectId:project.id,section:'schedule'}));
+      if(project.plannedEndDate&&project.plannedEndDate<today&&!['handover','warranty'].includes(project.status))attentions.push({priority:2,days:overdueDays(project.plannedEndDate),icon:'!',title:'Просрочена плановая сдача',detail:`${project.name} · ${overdueDays(project.plannedEndDate)} дн.`,projectId:project.id,section:'overview'});
+    });
+    (state.projectTasks||[]).forEach(task=>{
+      const bucket=taskBucket(task,today),project=proj(task.projectId);if(bucket==='overdue')attentions.push({priority:2,days:overdueDays(task.deadline),icon:'✓',title:`Просрочена задача · ${task.title}`,detail:`${project?.name||'Объект'} · ${overdueDays(task.deadline)} дн.${taskOwner(task)?' · '+taskOwner(task):''}`,projectId:task.projectId,section:'tasks'});else if(bucket==='today'&&task.priority==='urgent')attentions.push({priority:1,days:0,icon:'✓',title:`Срочная задача сегодня · ${task.title}`,detail:project?.name||'Объект',projectId:task.projectId,section:'tasks'});
+    });
+    (state.leads||[]).filter(leadOverdue).forEach(lead=>attentions.push({priority:2,days:overdueDays(lead.nextContactAt),icon:'◇',title:`Заявка · ${lead.clientName}`,detail:`${lead.nextAction||'Следующий контакт'} · ${overdueDays(lead.nextContactAt)} дн.`,leadId:lead.id}));
+    (state.designers||[]).filter(designerOverdue).forEach(designer=>attentions.push({priority:2,days:overdueDays(designer.nextContactAt),icon:'✦',title:`Связаться с дизайнером · ${designerName(designer)}`,detail:`${designer.nextAction||'Следующий контакт'} · ${overdueDays(designer.nextContactAt)} дн.`,designerId:designer.id}));
+    (state.acts||[]).filter(x=>['issued','signed','partially_paid'].includes(x.status)&&actPaid(x.id)<numeric(x.amount)).forEach(x=>attentions.push({priority:1,days:0,icon:'₽',title:`Акт №${x.number} ожидает оплаты`,detail:`${proj(x.projectId)?.name||'Объект'} · ${money(numeric(x.amount)-actPaid(x.id))}`,projectId:x.projectId,section:'finance',financeSection:'acts'}));
+    (state.waybills||[]).filter(x=>['sent','partially_paid'].includes(x.status)&&waybillPaid(x.id)<numeric(x.amount)).forEach(x=>attentions.push({priority:1,days:0,icon:'₽',title:`Накладная №${x.number} не закрыта`,detail:`${proj(x.projectId)?.name||'Объект'} · ${money(numeric(x.amount)-waybillPaid(x.id))}`,projectId:x.projectId,section:'finance',financeSection:'waybills'}));
+    const attention=attentions.sort((a,b)=>b.priority-a.priority||b.days-a.days).slice(0,10);
+    const attentionHtml=attention.map(item=>`<button class="attention-item ${item.priority===2?'critical':'warning'}" ${item.projectId?`data-open-project="${esc(item.projectId)}" data-section="${esc(item.section)}" data-finance-section="${esc(item.financeSection||'')}"`:item.leadId?`data-home-lead="${esc(item.leadId)}"`:`data-home-designer="${esc(item.designerId)}"`}><span class="attention-icon">${item.icon}</span><span class="grow"><strong>${esc(item.title)}</strong><span>${esc(item.detail)}</span></span><b>${item.priority===2?'Критично':'Важно'}</b></button>`).join('');
+    const activeLeads=(state.leads||[]).filter(x=>!leadTerminal(x)),newLeads=activeLeads.filter(x=>x.status==='new'),contracts=(state.leads||[]).filter(x=>x.status==='contract'),overdueLeads=activeLeads.filter(leadOverdue);
+    const leadRank={new:1,negotiation:2,estimate:3,measurement:4,contacted:5,contract:6,lost:7};
+    const leadPreview=[...(state.leads||[])].sort((a,b)=>(leadOverdue(b)?1:0)-(leadOverdue(a)?1:0)||(leadRank[a.status]||9)-(leadRank[b.status]||9)||String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,5);
+    const activeDesigners=(state.designers||[]).filter(x=>!x.isArchived&&x.status!=='inactive'),designerOverdues=activeDesigners.filter(designerOverdue),referredDesigners=activeDesigners.filter(x=>['referred_lead','has_project'].includes(x.status)),projectDesigners=activeDesigners.filter(x=>x.status==='has_project'||designerProjects(x.id).length),designerContacts=activeDesigners.filter(x=>x.nextContactAt).sort((a,b)=>(designerOverdue(b)?1:0)-(designerOverdue(a)?1:0)||a.nextContactAt.localeCompare(b.nextContactAt)).slice(0,5);
+    const tasks=(state.projectTasks||[]).filter(x=>!['completed','cancelled'].includes(x.status)),taskCounts={overdue:0,today:0,upcoming:0};tasks.forEach(x=>{const bucket=taskBucket(x,today);if(taskCounts[bucket]!=null)taskCounts[bucket]++});const taskPreview=[...tasks].sort((a,b)=>(taskBucket(a,today)==='overdue'?0:taskBucket(a,today)==='today'?1:2)-(taskBucket(b,today)==='overdue'?0:taskBucket(b,today)==='today'?1:2)||String(a.deadline||'9999').localeCompare(String(b.deadline||'9999'))).slice(0,5);
+    const projectRows=projects.slice(0,8).map(project=>{const summary=scheduleSummary(project.id),responsible=(state.projectResponsibles||[]).find(x=>x.project_id===project.id&&x.user?.is_active!==false)?.user,current=summary.current||summary.next;return `<button class="dashboard-project" data-open-project="${esc(project.id)}"><span class="status-dot ${summary.delay?'critical':summary.stages.length?'':'warn'}"></span><span class="grow"><strong>${esc(project.name)}</strong><span>${esc(projectStatusLabel(project.status))} · ${summary.stages.length?summary.progress+'%':'готовность не задана'}${responsible?' · '+esc(responsibleName(responsible)):''}</span><span>${esc(current?.name||'Текущий этап не определён')} · сдача ${esc(projectDate(project.plannedEndDate))}</span></span><b>${esc(summary.delay?`−${summary.delay} дн.`:summary.stages.length?'По графику':'Нет данных')}</b></button>`}).join('');
+    const leadRows=leadPreview.map(x=>`<button class="dashboard-preview" data-home-lead="${esc(x.id)}"><span class="lead-avatar">◇</span><span class="grow"><strong>${esc(x.clientName)} · ${esc(x.projectName)}</strong><small>${esc(leadStatusLabels[x.status]||x.status)} · ${esc(leadSourceLabels[x.source]||x.source)}${x.designerId?' · '+esc(designerName(leadDesigner(x))):''}</small><small class="${leadOverdue(x)?'danger-text':''}">${esc(x.nextContactAt?designerContactDate(x.nextContactAt):'Следующий контакт не назначен')}</small></span></button>`).join('');
+    const designerRows=`<div class="dashboard-mini-stats"><span><b>${referredDesigners.length}</b><small>передали заявки</small></span><span><b>${projectDesigners.length}</b><small>с объектами</small></span></div>`+(designerContacts.map(x=>`<button class="dashboard-preview" data-home-designer="${esc(x.id)}"><span class="master-avatar">${esc(designerName(x).slice(0,2).toUpperCase())}</span><span class="grow"><strong>${esc(designerName(x))}</strong><small>${esc(x.studio||designerStatusLabels[x.status]||'Дизайнер')}</small><small class="${designerOverdue(x)?'danger-text':''}">${esc(designerContactDate(x.nextContactAt))} · ${esc(x.nextAction||'Связаться')}</small></span></button>`).join('')||'<div class="empty compact-empty">Ближайших контактов пока нет</div>');
+    const taskRows=taskPreview.map(x=>`<button class="dashboard-preview" data-open-project="${esc(x.projectId)}" data-section="tasks"><span class="priority-dot ${esc(x.priority)}"></span><span class="grow"><strong>${esc(x.title)}</strong><small>${esc(proj(x.projectId)?.name||'Объект')}${taskOwner(x)?' · '+esc(taskOwner(x)):''}</small><small class="${taskBucket(x,today)==='overdue'?'danger-text':''}">${esc(x.deadline?projectDate(x.deadline):'Без срока')} · ${esc(taskPriorityLabels[x.priority]||'Обычный')}</small></span></button>`).join('');
+    $('#app').innerHTML = `${pageHeader('ADMA · ОБЗОР','Главная','Что происходит в компании и что требует внимания',`<div class="dashboard-actions"><label>Финансы за<input id="dashboardPeriod" type="month" value="${esc(dashboardPeriod)}"></label><button id="homeAddProject" class="btn primary">+ Объект</button></div>`)}<section class="dashboard-metrics dashboard-kpis"><button class="card dashboard-metric" data-home-tab="projects"><small>Активные объекты</small><strong>${projects.length}</strong><span>${projects.filter(p=>scheduleSummary(p.id).current).length} сейчас в работе</span></button><button class="card dashboard-metric" data-home-tab="finance"><small>Прибыль объектов</small><strong>${money(finance.objectProfit)}</strong><span>${esc(monthLabel)}</span></button><button class="card dashboard-metric" data-home-tab="finance"><small>К возмещению</small><strong>${money(finance.due)}</strong><span>Не уменьшает прибыль</span></button><button class="card dashboard-metric" data-home-tab="finance"><small>Общие расходы</small><strong>${money(finance.general)}</strong><span>${esc(monthLabel)}</span></button><button class="card dashboard-metric featured" data-home-tab="finance"><small>Итоговая прибыль ADMA</small><strong>${money(finance.profit)}</strong><span>Прибыль объектов − общие расходы</span></button></section><section class="dashboard-columns dashboard-primary"><div class="card panel-card"><div class="section compact"><div><h2>Активные объекты</h2><p>Готовность, текущий этап и сроки</p></div><button class="btn secondary" data-home-tab="projects">Открыть все →</button></div><div class="activity-list">${projectRows||'<div class="empty">Активных объектов пока нет</div>'}</div></div><div class="card panel-card dashboard-attention"><div class="section compact"><h2>Требует внимания</h2><span class="badge ${attention.length?'pending':'paid'}">${attention.length}</span></div><div class="attention-list">${attentionHtml||'<div class="empty">Нет элементов, требующих внимания</div>'}</div></div></section><section class="dashboard-secondary"><div class="card panel-card"><div class="section compact"><div><h2>Заявки</h2><p>${newLeads.length} новых · ${activeLeads.length} активных · ${contracts.length} договоров · ${overdueLeads.length} просрочено</p></div><button class="btn secondary" data-home-tab="leads">Открыть все →</button></div><div class="dashboard-preview-list">${leadRows||'<div class="empty">Заявок пока нет</div>'}</div></div><div class="card panel-card"><div class="section compact"><div><h2>Задачи</h2><p>${taskCounts.overdue} просрочено · ${taskCounts.today} сегодня · ${taskCounts.upcoming} предстоит</p></div></div><div class="dashboard-preview-list">${taskRows||'<div class="empty">Активных задач пока нет</div>'}</div></div><div class="card panel-card"><div class="section compact"><div><h2>Дизайнеры</h2><p>${activeDesigners.length} активных · ${designerOverdues.length} контактов просрочено</p></div><button class="btn secondary" data-home-tab="designers">Открыть все →</button></div><div class="dashboard-preview-list">${designerRows||'<div class="empty">Ближайших контактов пока нет</div>'}</div></div></section><section class="card panel-card dashboard-finance"><div class="section compact"><div><h2>Финансы по объектам</h2><p>${esc(monthLabel)} · Чеки / Разное не вычитаются из прибыли</p></div><button class="btn secondary" data-home-tab="finance">Финансы →</button></div><div class="dashboard-finance-grid">${projects.length?projects.slice(0,6).map(project=>{const totals=projectFinanceTotals(project.id,dashboardPeriod);return `<button class="dashboard-finance-project" data-open-project="${esc(project.id)}" data-section="finance"><span><strong>${esc(project.name)}</strong><small>Прибыль</small></span><b>${money(totals.profit)}</b><span>К возмещению ${money(totals.due)}</span></button>`}).join(''):'<div class="empty">Нет активных объектов для сводки</div>'}</div></section>`;
     const add = document.getElementById('homeAddProject'); if (add) add.onclick = openProjectCreateCloud;
+    document.getElementById('dashboardPeriod').onchange=event=>{dashboardPeriod=event.target.value||new Date().toISOString().slice(0,7);renderHomeCloud()};
     document.querySelectorAll('[data-home-tab]').forEach(button => button.onclick = () => navigateGlobal(button.dataset.homeTab));
-    document.querySelectorAll('[data-open-project]').forEach(button => button.onclick = () => navigateProject(button.dataset.openProject, button.dataset.section || 'overview', button.dataset.section === 'finance' ? 'checks' : null));
+    document.querySelectorAll('[data-open-project]').forEach(button => button.onclick = () => navigateProject(button.dataset.openProject, button.dataset.section || 'overview', button.dataset.financeSection || null));
+    document.querySelectorAll('[data-home-lead]').forEach(button=>button.onclick=()=>openLeadDetails(button.dataset.homeLead));
+    document.querySelectorAll('[data-home-designer]').forEach(button=>button.onclick=()=>openDesignerDetails(button.dataset.homeDesigner));
   }
 
   function renderProjectsCloud() {
