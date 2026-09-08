@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 
 const migration=readFileSync(new URL('../supabase/migrations/20260908150000_add_leads_crm_stage8.sql',import.meta.url),'utf8');
+const indexMigration=readFileSync(new URL('../supabase/migrations/20260908151000_add_leads_designer_index.sql',import.meta.url),'utf8');
 const apiSource=readFileSync(new URL('../supabase/functions/leads-api/index.ts',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../cloud.js',import.meta.url),'utf8');
 
@@ -14,6 +15,7 @@ test('stage 8 migration is additive, private and uses canonical foreign keys',()
  assert.match(migration,/designer_id uuid references public\.designers\(id\)/);assert.match(migration,/project_id uuid unique references public\.projects\(id\)/);
  assert.match(migration,/alter table public\.leads enable row level security/);assert.match(migration,/revoke all on table public\.leads,public\.lead_interactions from public,anon,authenticated/);
  assert.doesNotMatch(migration,/drop\s+(table|column)|truncate|delete\s+from/i);
+ assert.match(indexMigration,/idx_leads_designer on public\.leads\(designer_id\)/);assert.doesNotMatch(indexMigration,/drop|truncate|delete\s+from/i);
 });
 
 test('lead metadata requires designer source and loss reason',()=>{
