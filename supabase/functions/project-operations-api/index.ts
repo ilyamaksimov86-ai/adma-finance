@@ -1,4 +1,5 @@
 import { requireUser, AuthError } from '../_shared/auth.mjs';
+import { removeStorageObject } from '../_shared/storage-cleanup.mjs';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 
@@ -107,8 +108,8 @@ Deno.serve(async req => {
       await requireProject(old.project_id);
       const {error} = await db.from(table).delete().eq('id',itemId);
       if (error) throw error;
-      const {error:storageError} = await db.storage.from('project-files').remove([old.storage_path]);
-      return json({ok:true, cleanup_pending:!!storageError});
+      const cleanupPending = await removeStorageObject(db,'project-files',old.storage_path);
+      return json({ok:true, cleanup_pending:cleanupPending});
     }
 
     if (action === 'save_task') {

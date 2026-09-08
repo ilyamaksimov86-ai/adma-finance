@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["version", "compatibility", "errors", "endpoints"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "compatibility": { "type": "string", "minLength": 1 },
+    "errors": { "type": "object", "required": ["shape", "rule"] },
+    "endpoints": { "type": "object", "minProperties": 1 }
+  }
+}

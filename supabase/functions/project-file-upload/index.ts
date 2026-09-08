@@ -1,4 +1,5 @@
 import { requireUser, credentialsFromForm, AuthError } from '../_shared/auth.mjs';
+import { removeStorageObject } from '../_shared/storage-cleanup.mjs';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 
@@ -58,7 +59,7 @@ Deno.serve(async req => {
     const row={project_id:projectId,...metadata,storage_path:path,original_name:originalName,mime_type:mime,size_bytes:file.size,created_by:user.id};
     const table=kind==='document'?'project_documents':'project_photos';
     const {data,error}=await db.from(table).insert(row).select('*').single();
-    if(error){await db.storage.from('project-files').remove([path]);throw error;}
+    if(error){await removeStorageObject(db,'project-files',path);throw error;}
     const {data:signed}=await db.storage.from('project-files').createSignedUrl(path,3600);
     return json({ok:true,[kind]:{...data,file_url:signed?.signedUrl||null}});
   } catch(error) {

@@ -1,4 +1,5 @@
 import { requireUser, AuthError } from '../_shared/auth.mjs';
+import { removeStorageObject } from '../_shared/storage-cleanup.mjs';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 
@@ -37,7 +38,7 @@ Deno.serve(async req=>{
     const user=await requireUser(db,body,Deno.env.get('TELEGRAM_BOT_TOKEN'));
     if(user.role!=='owner'&&user.role!=='partner')return json({error:'forbidden'},403);
     const action=String(body?.action||'load');
-    const removeFile=async(path:any)=>{if(path)await db.storage.from('finance-documents').remove([String(path)])};
+    const removeFile=(path:any)=>removeStorageObject(db,'finance-documents',path);
     const signed=async(rows:any[])=>Promise.all((rows||[]).map(async row=>{row.file_url=null;if(row.file_path){const {data}=await db.storage.from('finance-documents').createSignedUrl(row.file_path,3600);row.file_url=data?.signedUrl||null}return row}));
     const recalcAct=async(actId:string)=>{const [{data:act,error:ae},{data:payments,error:pe}]=await Promise.all([db.from('finance_acts').select('amount,status').eq('id',actId).single(),db.from('finance_act_payments').select('amount').eq('act_id',actId)]);if(ae)throw ae;if(pe)throw pe;const paid=(payments||[]).reduce((s:number,x:any)=>s+Number(x.amount||0),0);let status=act.status;if(paid>=Number(act.amount)&&Number(act.amount)>0)status='paid';else if(paid>0)status='partially_paid';else if(status==='paid'||status==='partially_paid')status='signed';const {error}=await db.from('finance_acts').update({status,updated_at:new Date().toISOString()}).eq('id',actId);if(error)throw error};
     const recalcWaybill=async(waybillId:string)=>{const [{data:w,error:we},{data:payments,error:pe}]=await Promise.all([db.from('finance_waybills').select('amount,status').eq('id',waybillId).single(),db.from('finance_waybill_payments').select('amount').eq('waybill_id',waybillId)]);if(we)throw we;if(pe)throw pe;if(w.status==='closed')return;const paid=(payments||[]).reduce((s:number,x:any)=>s+Number(x.amount||0),0);const status=paid>=Number(w.amount)&&Number(w.amount)>0?'paid':paid>0?'partially_paid':w.status==='paid'||w.status==='partially_paid'?'sent':w.status;const {error}=await db.from('finance_waybills').update({status,updated_at:new Date().toISOString()}).eq('id',waybillId);if(error)throw error};
@@ -60,7 +61,7 @@ Deno.serve(async req=>{
       if(error)throw error;return json({ok:true,act:data});
     }
     if(action==='delete_act'){
-      const actId=id(body.id);const {data:old,error:oe}=await db.from('finance_acts').select('file_path').eq('id',actId).single();if(oe)throw oe;const {error}=await db.from('finance_acts').delete().eq('id',actId);if(error)throw error;await removeFile(old.file_path);return json({ok:true});
+      const actId=id(body.id);const {data:old,error:oe}=await db.from('finance_acts').select('file_path').eq('id',actId).single();if(oe)throw oe;const {error}=await db.from('finance_acts').delete().eq('id',actId);if(error)throw error;const cleanup_pending=await removeFile(old.file_path);return json({ok:true,cleanup_pending});
     }
     if(action==='add_act_cost'||action==='add_act_payment'){
       const actId=id(body.act_id),isCost=action==='add_act_cost';const row=isCost?{act_id:actId,cost_date:date(body.date),amount:amount(body.amount),description:text(body.comment,1000),created_by:user.id}:{act_id:actId,payment_date:date(body.date),amount:amount(body.amount),comment:text(body.comment,1000),created_by:user.id};const {data,error}=await db.from(isCost?'finance_act_costs':'finance_act_payments').insert(row).select('*').single();if(error)throw error;if(!isCost)await recalcAct(actId);return json({ok:true,item:data});
@@ -75,7 +76,7 @@ Deno.serve(async req=>{
       if(error)throw error;return json({ok:true,waybill:data});
     }
     if(action==='delete_waybill'){
-      const waybillId=id(body.id);const {data:old,error:oe}=await db.from('finance_waybills').select('file_path').eq('id',waybillId).single();if(oe)throw oe;const {error}=await db.from('finance_waybills').delete().eq('id',waybillId);if(error)throw error;await removeFile(old.file_path);return json({ok:true});
+      const waybillId=id(body.id);const {data:old,error:oe}=await db.from('finance_waybills').select('file_path').eq('id',waybillId).single();if(oe)throw oe;const {error}=await db.from('finance_waybills').delete().eq('id',waybillId);if(error)throw error;const cleanup_pending=await removeFile(old.file_path);return json({ok:true,cleanup_pending});
     }
     if(action==='add_waybill_payment'){
       const waybillId=id(body.waybill_id);const {data,error}=await db.from('finance_waybill_payments').insert({waybill_id:waybillId,payment_date:date(body.date),amount:amount(body.amount),comment:text(body.comment,1000),created_by:user.id}).select('*').single();if(error)throw error;await recalcWaybill(waybillId);return json({ok:true,item:data});
@@ -90,7 +91,7 @@ Deno.serve(async req=>{
       if(error)throw error;return json({ok:true,expense:data});
     }
     if(action==='delete_company_expense'){
-      const expenseId=id(body.id);const {data:old,error:oe}=await db.from('company_expenses').select('file_path').eq('id',expenseId).single();if(oe)throw oe;const {error}=await db.from('company_expenses').delete().eq('id',expenseId);if(error)throw error;await removeFile(old.file_path);return json({ok:true});
+      const expenseId=id(body.id);const {data:old,error:oe}=await db.from('company_expenses').select('file_path').eq('id',expenseId).single();if(oe)throw oe;const {error}=await db.from('company_expenses').delete().eq('id',expenseId);if(error)throw error;const cleanup_pending=await removeFile(old.file_path);return json({ok:true,cleanup_pending});
     }
     return json({error:'unknown_action'},400);
   }catch(e){const message=e instanceof Error?e.message:'unknown_error';return json({error:message},e instanceof AuthError?e.status:['missing_hash','bad_signature','expired_init_data','missing_user'].includes(message)?401:message.startsWith('invalid_')||message==='required_field'||message==='field_too_long'?400:500)}
