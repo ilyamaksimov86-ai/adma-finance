@@ -224,12 +224,12 @@ API payloads и форматы ошибок должны быть стабиль
 | CRM Дизайнеров | included | Этап 7 завершён; связь с объектами через `projects.designer_id` |
 | CRM Заявок | included | Этап 8 завершён; Designer → Lead → Project |
 | Финальный агрегированный Dashboard | included | Этап 10 завершён; реальные агрегаты и «Требует внимания» |
-| Техническое укрепление | in_progress | Следующий технический этап без смены стека |
-| База знаний ADMA | deferred | Будущий модуль: техкарты, ошибки/кейсы с объектов, причины, решения и профилактика; связи с объектами/этапами/фото/мастерами |
+| Техническое укрепление | included | Feature-модули, architecture/contract checks и durable Storage cleanup |
+| Финальный UI/UX | in_progress | Следующий этап: полировка существующей дизайн-системы без редизайна |\n| База знаний ADMA | deferred | Будущий модуль: техкарты, ошибки/кейсы с объектов, причины, решения и профилактика; связи с объектами/этапами/фото/мастерами |
 | Нативное iOS/Android приложение | deferred | Будущий отдельный клиент к существующему backend/API |
 | Push-уведомления | deferred | Реализовывать только при отдельной задаче |
-| Background cleanup orphan-файлов | deferred | Небольшой технический maintenance-этап; использовать текущую инфраструктуру |
-| Shared API contracts для web/mobile | deferred | Вводить постепенно перед/при разработке отдельного mobile-клиента |
+| Background cleanup orphan-файлов | included | Приватная очередь, Vault-authenticated hourly worker и backoff |
+| Shared API contracts для web/mobile | included | Проверяемый контракт основных command/file API; изменения additive |
 | Глобальная фотогалерея | removed | В первой версии не нужна |
 | Сложный Gantt / resource planning | removed | Не требуется без отдельного этапа |
 | Складской учёт | removed | Не требуется |
