@@ -102,7 +102,7 @@ test('knowledge file upload authenticates before touching private storage',async
 test('project metadata is normalized and validated',()=>{
  const parse=projectParser();
  const valid=parse({name:'  Новый объект  ',status:'preparation',area_sqm:'86.5',client_name:' Заказчик ',start_date:'2026-09-10',planned_end_date:'2027-01-20'});
- assert.deepEqual(valid.value,{name:'Новый объект',address:null,client_name:'Заказчик',client_phone:null,comment:null,contract_number:null,area_sqm:86.5,start_date:'2026-09-10',planned_end_date:'2027-01-20',actual_end_date:null,warranty_until:null,status:'preparation',designer_id:null});
+ assert.deepEqual(valid.value,{contract_amount:null,name:'Новый объект',address:null,client_name:'Заказчик',client_phone:null,comment:null,contract_number:null,area_sqm:86.5,start_date:'2026-09-10',planned_end_date:'2027-01-20',actual_end_date:null,warranty_until:null,status:'preparation',designer_id:null});
  assert.equal(parse({name:'Объект',area_sqm:0}).error,'invalid_area');
  assert.equal(parse({name:'Объект',status:'unknown'}).error,'invalid_status');
  assert.equal(parse({name:'Объект',start_date:'2026-10-01',planned_end_date:'2026-09-01'}).error,'invalid_project_dates');

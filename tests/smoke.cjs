@@ -225,6 +225,29 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     await open();await photo();failSave=true;await submit();await until(()=>page.evaluate(()=>document.getElementById('cloudBanner')?.textContent.includes('test_save_failure')));
     const uploadCount=uploads.length;await submit();await closed();assert.equal(uploads.length,uploadCount);assert.equal(expenses.at(-1).receipt_path,'user/receipt-2.jpg');pass('failed save retries without uploading photo again');
     await open();delaySave=true;const count=requests.filter(r=>r.action==='create_expense').length;await page.evaluate(()=>{expenseForm.requestSubmit();expenseForm.requestSubmit();});await closed();assert.equal(requests.filter(r=>r.action==='create_expense').length,count+1);pass('double submit creates one expense');
+    // Test-only fixture server: production records are never edited by this smoke.
+    for(const width of [1366,390]){
+      await page.setViewportSize({width,height:844});
+      await switchTab('projects');await page.locator('.project-list-card').filter({hasText:'Тестовый объект'}).click();
+      for(const value of ['5500000','6000000','']){
+        await page.click('#editProjectCloud');await page.fill('#pContractAmount',value);
+        await page.locator('#projectForm').evaluate(f=>f.requestSubmit());
+        await until(()=>page.evaluate(()=>!projectDlg.open));
+        assert.equal(projects[0].contract_amount,value===''?null:Number(value));
+        await page.reload();await page.locator('[data-contract-amount]').waitFor();
+        const display=await page.locator('[data-contract-amount]').innerText();
+        assert.equal(display.replace(/\\s/g,''),value===''?'Неуказана':value+'₽');
+        assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+      }
+    }
+    await page.setViewportSize({width:1366,height:900});
+    for(const value of ['', '5500000']){
+      await switchTab('projects');await page.click('#addProject');
+      await page.fill('#pName','Contract fixture '+(value||'empty'));await page.fill('#pContractAmount',value);
+      await page.locator('#projectForm').evaluate(f=>f.requestSubmit());await until(()=>page.evaluate(()=>!projectDlg.open));
+      assert.equal(projects.at(-1).contract_amount,value===''?null:Number(value));
+    }
+    pass('project contract create, persistence, edit, clear and money formatting on desktop/mobile');
     await switchTab('knowledge');await page.click('[data-knowledge-section="issues"]');await page.click('[data-issue]');page.once('dialog',d=>d.accept());await page.click('#knowledgeIssueDlg [data-delete-knowledge-attachment]');await until(()=>knowledgeAttachments.length===1);page.once('dialog',d=>d.accept());await page.click('#knowledgeIssueDlg [data-delete]');await until(()=>knowledgeIssues.length===0);await page.click('[data-knowledge-section="tech"]');await page.click('[data-tech-card]');page.once('dialog',d=>d.accept());await page.click('#knowledgeTechDlg [data-delete]');await until(()=>knowledgeTechCards.length===0&&knowledgeAttachments.length===0);pass('knowledge attachments and records delete safely');
     await page.setViewportSize({width:390,height:844});await switchTab('more');assert.equal(await page.locator('[data-mobile-route]').count(),4);await page.click('[data-mobile-route="knowledge"]');assert.match(await page.locator('#app').innerText(),/База знаний/);assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);pass('knowledge base is accessible without overflow on mobile and Telegram layout');await switchTab('projects');await page.locator('.project-list-card').filter({hasText:'Тестовый объект'}).click();
     assert.equal(await page.locator('.project-tabs [data-project-section]').count(),7);assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);for(const section of ['documents','tasks','photos']){await page.click(`[data-project-section="${section}"]`);assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);}pass('mobile project operations have no page overflow');
