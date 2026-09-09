@@ -30,6 +30,7 @@
       "transport": "json-command",
       "actions": {
         "load": { "request": [], "response": ["ok", "current_user", "projects", "expenses", "stages"] },
+        "get_receipt_url": { "request": ["id"], "response": ["ok", "url", "expires_in"] },
         "list_users": { "request": [], "response": ["ok", "users"] },
         "set_project_members": { "request": ["project_id", "user_ids"], "response": ["ok"] },
         "update_user_access": { "request": ["user_id", "role", "is_active"], "response": ["ok", "user"] },
@@ -50,6 +51,7 @@
       "transport": "json-command",
       "actions": {
         "load": { "request": [], "response": ["ok", "acts", "act_costs", "act_payments", "waybills", "waybill_payments", "company_expenses"] },
+        "get_file_url": { "request": ["kind", "id"], "response": ["ok", "url", "expires_in"] },
         "save_act": { "request": ["act"], "response": ["ok", "act"] },
         "delete_act": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
         "add_act_cost": { "request": ["act_id", "date", "amount"], "response": ["ok", "item"] },
@@ -78,6 +80,7 @@
       "transport": "json-command",
       "actions": {
         "load": { "request": [], "response": ["ok", "documents", "tasks", "photos"] },
+        "get_file_url": { "request": ["kind", "id"], "response": ["ok", "url", "expires_in"] },
         "save_document": { "request": ["document"], "response": ["ok", "document"] },
         "delete_document": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
         "save_task": { "request": ["task"], "response": ["ok", "task"] },
@@ -92,22 +95,23 @@
         "load": { "request": [], "response": ["ok", "designers", "interactions", "users", "projects"] },
         "save_designer": { "request": ["designer"], "response": ["ok", "designer"], "designer_model": "Designer" },
         "archive_designer": { "request": ["id", "archived"], "response": ["ok", "designer"] },
-        "add_interaction": { "request": ["interaction"], "response": ["ok", "interaction"] }
+        "add_interaction": { "request": ["interaction"], "response": ["ok", "interaction", "designer"] }
       }
     },
     "leads-api": {
       "transport": "json-command",
       "actions": {
         "load": { "request": [], "response": ["ok", "leads", "interactions", "users"] },
-        "save_lead": { "request": ["lead"], "response": ["ok", "lead", "duplicates"] },
-        "add_interaction": { "request": ["interaction"], "response": ["ok", "interaction"] },
-        "convert_lead": { "request": ["lead_id", "project"], "response": ["ok", "lead", "project"] }
+        "save_lead": { "request": ["lead"], "response": ["ok", "lead", "designer", "duplicates"] },
+        "add_interaction": { "request": ["interaction"], "response": ["ok", "interaction", "lead"] },
+        "convert_lead": { "request": ["lead_id", "project"], "response": ["ok", "lead", "project", "designer"] }
       }
     },
     "knowledge-api": {
       "transport": "json-command",
       "actions": {
         "load": { "request": [], "response": ["ok", "tech_cards", "checklist_items", "issues", "attachments"] },
+        "get_file_url": { "request": ["id"], "response": ["ok", "url", "expires_in"] },
         "save_tech_card": { "request": ["tech_card.title", "tech_card.category", "checklist_items"], "response": ["ok", "tech_card", "checklist_items"] },
         "delete_tech_card": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
         "save_issue": { "request": ["issue.title", "issue.category"], "response": ["ok", "issue"] },

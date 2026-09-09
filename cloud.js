@@ -155,6 +155,7 @@
     return post('knowledge-api', { ...await AdmaAuth.credentials(), action, ...extra });
   }
 
+
   function mapProject(p) {
     return {
       id: p.id,
@@ -225,6 +226,45 @@
   const mapKnowledgeChecklistItem=x=>({...x,techCardId:x.tech_card_id,text:x.item_text,position:Number(x.position||0)});
   const mapKnowledgeIssue=x=>({...x,createdAt:x.created_at,updatedAt:x.updated_at,authorName:authorName(x)});
   const mapKnowledgeAttachment=x=>({...x,techCardId:x.tech_card_id||'',issueId:x.issue_id||'',filePath:x.storage_path,fileUrl:x.file_url||'',createdAt:x.created_at,authorName:authorName(x)});
+
+  const moduleState = Object.fromEntries(['finance','masters','operations','designers','leads','knowledge'].map(name => [name, { status: 'idle', promise: null, error: null }]));
+
+  function moduleLoader(name) {
+    return ({ finance: loadFinanceCloud, masters: loadMastersCloud, operations: loadProjectOperationsCloud, designers: loadDesignersCloud, leads: loadLeadsCloud, knowledge: loadKnowledgeCloud })[name];
+  }
+
+  function ensureModule(name, force = false) {
+    const entry = moduleState[name];
+    if (!entry) return Promise.reject(new Error('unknown_module'));
+    if (!force && entry.status === 'loaded') return Promise.resolve();
+    if (entry.status === 'loading' && entry.promise) return entry.promise;
+    entry.status = 'loading';
+    entry.error = null;
+    entry.promise = Promise.resolve().then(() => moduleLoader(name)()).then(() => {
+      entry.status = 'loaded';
+      entry.promise = null;
+      if (cloudReady) render();
+    }).catch(error => {
+      entry.status = 'error';
+      entry.error = error;
+      entry.promise = null;
+      if (cloudReady) render();
+      throw error;
+    });
+    return entry.promise;
+  }
+
+  function patchMapped(listName, raw, mapper) {
+    const mapped = mapper(raw);
+    const list = state[listName] || (state[listName] = []);
+    const index = list.findIndex(item => item.id === mapped.id);
+    if (index < 0) list.push(mapped); else list[index] = mapped;
+    return mapped;
+  }
+
+  function removeFromState(listName, id) {
+    state[listName] = (state[listName] || []).filter(item => item.id !== id);
+  }
 
   let globalFinanceSection = 'summary';
 
@@ -299,15 +339,15 @@
   const knowledgeExcerpt=value=>{const plain=String(value||'').replace(/\s+/g,' ').trim();return plain.length>180?plain.slice(0,177)+'…':plain};
   function knowledgeCategories(){return [...new Set([...knowledgeBaseCategories,...(state.knowledgeTechCards||[]).map(x=>x.category),...(state.knowledgeIssues||[]).map(x=>x.category)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'))}
   async function uploadKnowledgeFile(file,entity,entityId){const credentials=await AdmaAuth.credentials();return new Promise((resolve,reject)=>{const form=new FormData();Object.entries(credentials).forEach(([key,value])=>form.append(key,value));form.append('entity',entity);form.append('entity_id',entityId);form.append('file',file,file.name);const xhr=new XMLHttpRequest();xhr.open('POST',SUPABASE_FUNCTIONS+'/knowledge-file-upload',true);xhr.timeout=60000;xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch{}if(xhr.status>=200&&xhr.status<300&&data.ok)resolve(data);else reject(new Error(data.error||`HTTP_${xhr.status}`))};xhr.onerror=()=>reject(new Error('Ошибка загрузки файла'));xhr.ontimeout=()=>reject(new Error('Загрузка файла заняла слишком много времени'));xhr.send(form)})}
-  async function refreshKnowledge(message=''){await loadKnowledgeCloud();render();if(message)banner(message,'ok')}
+  async function refreshKnowledge(message=''){await ensureModule('knowledge',true);if(message)banner(message,'ok')}
 
   async function loadCloud() {
     const data = await api('load');
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
-    const modules=[['Финансы',loadFinanceCloud],['Команда',loadMastersCloud],['Задачи и файлы',loadProjectOperationsCloud],['Дизайнеры',loadDesignersCloud],['Заявки',loadLeadsCloud],['База знаний',loadKnowledgeCloud]];
-    const results=await Promise.allSettled(modules.map(([,load])=>load()));
+    const modules=[['Финансы','finance'],['Команда','masters'],['Задачи и файлы','operations'],['Дизайнеры','designers'],['Заявки','leads'],['База знаний','knowledge']];
+    const results=await Promise.allSettled(modules.map(([,name])=>ensureModule(name,true)));
     dashboardLoadErrors=results.flatMap((result,index)=>result.status==='rejected'?[modules[index][0]]:[]);
     save();
     render();
@@ -692,8 +732,9 @@
     list.querySelectorAll('[data-side-project]').forEach(button => button.onclick = () => navigateProject(button.dataset.sideProject));
   }
 
-  function openProjectCreateCloud() {
+  async function openProjectCreateCloud() {
     if (!canManageProjects()) return;
+    if(moduleState.designers.status!=='loaded')try{await ensureModule('designers')}catch{}
     editingProjectId = null;
     projectForm.reset();
     pDesigner.innerHTML='<option value="">Не назначен</option>'+(state.designers||[]).filter(d=>!d.isArchived).map(d=>`<option value="${esc(d.id)}">${esc(designerName(d))}${d.studio?' · '+esc(d.studio):''}</option>`).join('');
@@ -703,8 +744,9 @@
     projectDlg.showModal();
   }
 
-  function openProjectEditCloud(id) {
+  async function openProjectEditCloud(id) {
     if (!canManageProjects()) return;
+    if(moduleState.designers.status!=='loaded')try{await ensureModule('designers')}catch{}
     const p = state.projects.find(x => x.id === id);
     if (!p) return;
     editingProjectId = id;
@@ -736,11 +778,12 @@
     if (archived && !confirm(`Перенести «${p.name}» в архив? Расходы и чеки сохранятся.`)) return;
     try {
       banner(archived ? 'Переношу объект в архив…' : 'Возвращаю объект в работу…');
-      await api('update_project', { project: { id, status: archived ? 'archived' : 'in_progress' } });
+      const data=await api('update_project', { project: { id, status: archived ? 'archived' : 'in_progress' } });
+      patchMapped('projects',data.project,mapProject);
       if (state.project === id) state.project = null;
       state.tab = 'projects';
       showArchivedProjects = archived;
-      await loadCloud();
+      save();render();
       banner(archived ? 'Объект перенесён в архив' : 'Объект снова активен', 'ok');
     } catch (e) {
       banner('Не удалось изменить статус объекта: ' + e.message, 'error');
@@ -871,13 +914,13 @@
   const assignmentStage=x=>(state.stages||[]).find(s=>s.id===x.stageId);
   function responsibleName(user){return [user?.first_name,user?.last_name].filter(Boolean).join(' ')||user?.web_login||user?.telegram_username||'Сотрудник'}
 
-  async function refreshMasters(message){await loadMastersCloud();render();if(message)banner(message,'ok')}
+  async function refreshMasters(message){await ensureModule('masters',true);if(message)banner(message,'ok')}
   function masterFormOptions(selected=[]){return Object.entries(masterSpecialtyLabels).map(([value,label])=>`<option value="${value}" ${selected.includes(value)?'selected':''}>${label}</option>`).join('')}
   function openMasterDialog(masterId=''){
     if(!canManageProjects())return;const master=(state.masters||[]).find(x=>x.id===masterId);
     const dlg=dynamicDialog('masterEditDlg',master?'Редактировать мастера':'Новый мастер',`<label>Имя<input name="name" required maxlength="160" value="${esc(master?.name||'')}"></label><div class="grid"><label>Телефон<input name="phone" maxlength="80" value="${esc(master?.phone||'')}"></label><label>Telegram<input name="telegram" maxlength="100" placeholder="@username" value="${esc(master?.telegram||'')}"></label></div><label>Основная специализация<select name="specialty">${masterFormOptions([master?.primarySpecialty||'other'])}</select></label><label>Дополнительные навыки<select name="skills" multiple size="6">${masterFormOptions(master?.additionalSkills||[])}</select><small class="muted">Можно выбрать несколько</small></label><div class="grid"><label>Внутренний рейтинг<input name="rating" type="number" min="1" max="5" step="0.1" value="${master?.rating??''}"></label><label>Уровень цен<select name="price"><option value="">Не указан</option>${Object.entries(masterPriceLabels).map(([value,label])=>`<option value="${value}" ${master?.priceLevel===value?'selected':''}>${label}</option>`).join('')}</select></label></div><label>Заметки<textarea name="notes" rows="4" maxlength="4000">${esc(master?.notes||'')}</textarea></label>${master?`<button type="button" class="btn ${master.isActive?'danger':'secondary'} full-button" data-archive>${master.isActive?'Архивировать мастера':'Вернуть из архива'}</button>`:''}`);
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{await mastersApi('save_master',{master:{id:master?.id,name:form.elements.name.value,phone:form.elements.phone.value,telegram:form.elements.telegram.value,primary_specialty:form.elements.specialty.value,additional_skills:[...form.elements.skills.selectedOptions].map(x=>x.value),rating:form.elements.rating.value||null,price_level:form.elements.price.value||null,notes:form.elements.notes.value}});dlg.close();await refreshMasters(master?'Мастер обновлён':'Мастер добавлен')}catch(e){banner('Не удалось сохранить мастера: '+e.message,'error')}finally{button.disabled=false}};
-    const archive=dlg.querySelector('[data-archive]');if(archive)archive.onclick=async()=>{const active=(state.masterAssignments||[]).filter(x=>x.masterId===master.id&&assignmentBlocksAvailability(x)).length;if(!confirm(master.isActive?`Архивировать мастера?${active?' Активные назначения сохранятся.':''}`:'Вернуть мастера из архива?'))return;try{await mastersApi('set_master_archived',{id:master.id,archived:master.isActive});dlg.close();await refreshMasters(master.isActive?'Мастер архивирован':'Мастер восстановлен')}catch(e){banner('Не удалось изменить статус: '+e.message,'error')}};
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{const data=await mastersApi('save_master',{master:{id:master?.id,name:form.elements.name.value,phone:form.elements.phone.value,telegram:form.elements.telegram.value,primary_specialty:form.elements.specialty.value,additional_skills:[...form.elements.skills.selectedOptions].map(x=>x.value),rating:form.elements.rating.value||null,price_level:form.elements.price.value||null,notes:form.elements.notes.value}});patchMapped('masters',data.master,mapMaster);dlg.close();render();banner(master?'Мастер обновлён':'Мастер добавлен','ok')}catch(e){banner('Не удалось сохранить мастера: '+e.message,'error')}finally{button.disabled=false}};
+    const archive=dlg.querySelector('[data-archive]');if(archive)archive.onclick=async()=>{const active=(state.masterAssignments||[]).filter(x=>x.masterId===master.id&&assignmentBlocksAvailability(x)).length;if(!confirm(master.isActive?`Архивировать мастера?${active?' Активные назначения сохранятся.':''}`:'Вернуть мастера из архива?'))return;try{const data=await mastersApi('set_master_archived',{id:master.id,archived:master.isActive});patchMapped('masters',data.master,mapMaster);dlg.close();render();banner(master.isActive?'Мастер архивирован':'Мастер восстановлен','ok')}catch(e){banner('Не удалось изменить статус: '+e.message,'error')}};
     dlg.showModal();
   }
 
@@ -893,8 +936,8 @@
     if(!masters.length){if(confirm('В базе пока нет активных мастеров. Перейти к созданию мастера?'))navigateGlobal('masters');return}
     const dlg=dynamicDialog('assignmentDlg',item?'Редактировать назначение':'Добавить мастера',`<label>Мастер<select name="master" required>${masters.map(m=>`<option value="${esc(m.id)}" ${item?.masterId===m.id?'selected':''}>${esc(m.name)} · ${esc(masterSpecialtyLabels[m.primarySpecialty]||'Другое')}</option>`).join('')}</select></label><label>Этап<select name="stage"><option value="">На объект в целом</option>${stages.map(s=>`<option value="${esc(s.id)}" ${item?.stageId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><div class="grid"><label>Дата начала<input name="start" type="date" required value="${esc(item?.startDate||new Date().toISOString().slice(0,10))}"></label><label>Плановое окончание<input name="plannedEnd" type="date" value="${esc(item?.plannedEndDate||'')}"></label></div><div class="grid"><label>Статус<select name="status">${Object.entries(assignmentStatusLabels).map(([value,label])=>`<option value="${value}" ${item?.status===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Фактическое окончание<input name="actualEnd" type="date" value="${esc(item?.actualEndDate||'')}"></label></div><label>Комментарий<textarea name="comment" rows="3" maxlength="2000">${esc(item?.comment||'')}</textarea></label>${item&&item.status!=='cancelled'?'<button type="button" class="btn danger full-button" data-cancel>Отменить назначение</button>':''}<button type="button" class="btn secondary full-button" data-create-master>Создать нового мастера в общей базе</button>`);
     const saveAssignment=async(form,allowConflict=false)=>mastersApi('save_assignment',{allow_conflict:allowConflict,assignment:{id:item?.id,master_id:form.elements.master.value,project_id:projectId,stage_id:form.elements.stage.value||null,start_date:form.elements.start.value,planned_end_date:form.elements.plannedEnd.value||null,actual_end_date:form.elements.actualEnd.value||null,status:form.elements.status.value,comment:form.elements.comment.value}});
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{try{await saveAssignment(form)}catch(e){if(e.message!=='assignment_conflict')throw e;if(!confirm('Мастер уже назначен на другой объект в этот период. Всё равно сохранить назначение?'))return;await saveAssignment(form,true)}dlg.close();await refreshMasters(item?'Назначение обновлено':'Мастер назначен')}catch(e){banner('Не удалось сохранить назначение: '+e.message,'error')}finally{button.disabled=false}};
-    const cancel=dlg.querySelector('[data-cancel]');if(cancel)cancel.onclick=async()=>{if(!confirm('Отменить назначение? Оно останется в истории мастера.'))return;try{await mastersApi('cancel_assignment',{id:item.id});dlg.close();await refreshMasters('Назначение отменено')}catch(e){banner('Не удалось отменить назначение: '+e.message,'error')}};
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{let data;try{data=await saveAssignment(form)}catch(e){if(e.message!=='assignment_conflict')throw e;if(!confirm('Мастер уже назначен на другой объект в этот период. Всё равно сохранить назначение?'))return;data=await saveAssignment(form,true)}patchMapped('masterAssignments',data.assignment,mapMasterAssignment);dlg.close();render();banner(item?'Назначение обновлено':'Мастер назначен','ok')}catch(e){banner('Не удалось сохранить назначение: '+e.message,'error')}finally{button.disabled=false}};
+    const cancel=dlg.querySelector('[data-cancel]');if(cancel)cancel.onclick=async()=>{if(!confirm('Отменить назначение? Оно останется в истории мастера.'))return;try{const data=await mastersApi('cancel_assignment',{id:item.id});patchMapped('masterAssignments',data.assignment,mapMasterAssignment);dlg.close();render();banner('Назначение отменено','ok')}catch(e){banner('Не удалось отменить назначение: '+e.message,'error')}};
     dlg.querySelector('[data-create-master]').onclick=()=>{dlg.close();navigateGlobal('masters');setTimeout(()=>openMasterDialog(),0)};dlg.showModal();
   }
 
@@ -908,7 +951,9 @@
   const waybillStatusLabels={created:'Создана',sent:'Отправлена',partially_paid:'Частично оплачена',paid:'Оплачена',closed:'Закрыта'};
   const companyCategoryLabels={advertising:'Реклама',services:'Сервисы / подписки',office:'Офис',transport:'Транспорт',administrative:'Административные',salaries:'Зарплаты',taxes:'Налоги',banking:'Банковские расходы',other:'Прочее'};
   const statusBadge = status => ['paid','closed'].includes(status)?'paid':['partially_paid','issued','sent'].includes(status)?'pending':'neutral';
-  const fileLink = item => item.fileUrl ? `<a class="btn secondary" href="${esc(item.fileUrl)}" target="_blank" rel="noopener">Открыть файл</a>` : '';
+  const financeFileKind=item=>item?.supplier?'waybill':item?.description&&item?.expense_date?'company_expense':'act';
+  const fileLink = item => item?.filePath ? `<button type="button" class="btn secondary" data-finance-file="${financeFileKind(item)}:${esc(item.id)}">Открыть файл</button>` : '';
+  async function openFinanceFile(kind,id){const lists={act:state.acts,waybill:state.waybills,company_expense:state.companyExpenses},item=(lists[kind]||[]).find(x=>x.id===id);if(!item)return;try{if(!item.fileUrl||item.fileUrlExpiresAt<=Date.now()){const data=await financeApi('get_file_url',{kind,id});item.fileUrl=data.url||'';item.fileUrlExpiresAt=Date.now()+Math.max(0,Number(data.expires_in||3600)-60)*1000}if(!item.fileUrl)throw new Error('file_unavailable');if(tgApp?.openLink)tgApp.openLink(item.fileUrl);else window.open(item.fileUrl,'_blank','noopener')}catch(e){banner('Не удалось открыть файл: '+e.message,'error')}}
   const financeEmpty = text => `<div class="card empty">${esc(text)}</div>`;
 
   async function uploadFinanceFile(file,entity){
@@ -916,18 +961,18 @@
     return new Promise((resolve,reject)=>{const form=new FormData();for(const [key,value] of Object.entries(credentials))form.append(key,value);form.append('entity',entity);form.append('file',file,file.name);const xhr=new XMLHttpRequest();xhr.open('POST',SUPABASE_FUNCTIONS+'/finance-file-upload',true);xhr.timeout=45000;xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch{};if(xhr.status>=200&&xhr.status<300&&data.path)return resolve(data.path);reject(new Error(data.error||`HTTP_${xhr.status}`))};xhr.onerror=()=>reject(new Error('Ошибка загрузки файла'));xhr.ontimeout=()=>reject(new Error('Загрузка файла заняла слишком много времени'));xhr.send(form)});
   }
   function dynamicDialog(id,title,body){let dlg=document.getElementById(id);if(!dlg){dlg=document.createElement('dialog');dlg.id=id;document.body.appendChild(dlg)}dlg.innerHTML=`<form class="finance-form"><div class="sheethead"><button type="button" data-close>Отмена</button><h2>${esc(title)}</h2><button class="btn primary">Сохранить</button></div>${body}</form>`;dlg.querySelector('[data-close]').onclick=()=>dlg.close();return dlg}
-  async function refreshFinance(message){await loadFinanceCloud();render();banner(message,'ok')}
+  async function refreshFinance(message){await ensureModule('finance',true);banner(message,'ok')}
 
   function openActDialog(projectId,actId=''){
     const act=(state.acts||[]).find(x=>x.id===actId);const stages=stagesFor(projectId);
     const dlg=dynamicDialog('actDlg',act?'Редактировать акт':'Новый акт',`<div class="grid"><label>Номер<input name="number" required maxlength="100" value="${esc(act?.number||'')}"></label><label>Дата<input name="date" type="date" required value="${esc(act?.date||new Date().toISOString().slice(0,10))}"></label></div><label>Название / описание<input name="title" required maxlength="300" value="${esc(act?.title||'')}"></label><div class="grid"><label>Этап<select name="stage"><option value="">Без этапа</option>${stages.map(s=>`<option value="${esc(s.id)}" ${act?.stageId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Сумма акта, ₽<input name="amount" type="number" min="0" step="0.01" required value="${act?.amount??''}"></label></div><label>Статус<select name="status">${Object.entries(actStatusLabels).map(([value,label])=>`<option value="${value}" ${act?.status===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(act||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(act?.comment||'')}</textarea></label>${act?'<button type="button" class="btn danger full-button" data-delete>Удалить акт</button>':''}`);
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=act?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'act');await financeApi('save_act',{act:{id:act?.id,project_id:projectId,stage_id:form.elements.stage.value||null,number:form.elements.number.value,act_date:form.elements.date.value,title:form.elements.title.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});dlg.close();await refreshFinance(act?'Акт обновлён':'Акт добавлен')}catch(e){banner('Не удалось сохранить акт: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить акт №${act.number}?`))return;try{await financeApi('delete_act',{id:act.id});dlg.close();await refreshFinance('Акт удалён')}catch(e){banner('Не удалось удалить акт: '+e.message,'error')}};dlg.showModal();
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=act?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'act');const data=await financeApi('save_act',{act:{id:act?.id,project_id:projectId,stage_id:form.elements.stage.value||null,number:form.elements.number.value,act_date:form.elements.date.value,title:form.elements.title.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});patchMapped('acts',data.act,mapAct);dlg.close();render();banner(act?'Акт обновлён':'Акт добавлен','ok')}catch(e){banner('Не удалось сохранить акт: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить акт №${act.number}?`))return;try{await financeApi('delete_act',{id:act.id});removeFromState('acts',act.id);state.actCosts=(state.actCosts||[]).filter(x=>x.actId!==act.id);state.actPayments=(state.actPayments||[]).filter(x=>x.actId!==act.id);dlg.close();render();banner('Акт удалён','ok')}catch(e){banner('Не удалось удалить акт: '+e.message,'error')}};dlg.showModal();
   }
   function openWaybillDialog(projectId,waybillId=''){
     const item=(state.waybills||[]).find(x=>x.id===waybillId);const dlg=dynamicDialog('waybillDlg',item?'Редактировать накладную':'Новая накладная',`<div class="grid"><label>Номер<input name="number" required maxlength="100" value="${esc(item?.number||'')}"></label><label>Дата<input name="date" type="date" required value="${esc(item?.date||new Date().toISOString().slice(0,10))}"></label></div><label>Поставщик<input name="supplier" required maxlength="200" value="${esc(item?.supplier||'')}"></label><label>Описание<textarea name="description" rows="2" maxlength="2000">${esc(item?.description||'')}</textarea></label><div class="grid"><label>Сумма накладной, ₽<input name="amount" type="number" min="0" step="0.01" required value="${item?.amount??''}"></label><label>Статус<select name="status">${Object.entries(waybillStatusLabels).map(([value,label])=>`<option value="${value}" ${item?.status===value?'selected':''}>${label}</option>`).join('')}</select></label></div><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(item||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(item?.comment||'')}</textarea></label>${item?'<button type="button" class="btn danger full-button" data-delete>Удалить накладную</button>':''}`);
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'waybill');await financeApi('save_waybill',{waybill:{id:item?.id,project_id:projectId,number:form.elements.number.value,waybill_date:form.elements.date.value,supplier:form.elements.supplier.value,description:form.elements.description.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});dlg.close();await refreshFinance(item?'Накладная обновлена':'Накладная добавлена')}catch(e){banner('Не удалось сохранить накладную: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить накладную №${item.number}?`))return;try{await financeApi('delete_waybill',{id:item.id});dlg.close();await refreshFinance('Накладная удалена')}catch(e){banner('Не удалось удалить накладную: '+e.message,'error')}};dlg.showModal();
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'waybill');const data=await financeApi('save_waybill',{waybill:{id:item?.id,project_id:projectId,number:form.elements.number.value,waybill_date:form.elements.date.value,supplier:form.elements.supplier.value,description:form.elements.description.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});patchMapped('waybills',data.waybill,mapWaybill);dlg.close();render();banner(item?'Накладная обновлена':'Накладная добавлена','ok')}catch(e){banner('Не удалось сохранить накладную: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить накладную №${item.number}?`))return;try{await financeApi('delete_waybill',{id:item.id});removeFromState('waybills',item.id);state.waybillPayments=(state.waybillPayments||[]).filter(x=>x.waybillId!==item.id);dlg.close();render();banner('Накладная удалена','ok')}catch(e){banner('Не удалось удалить накладную: '+e.message,'error')}};dlg.showModal();
   }
   function openFinanceLineDialog(kind,parentId){
     const definitions={act_cost:['Выплата / расход по акту','add_act_cost','act_id'],act_payment:['Оплата заказчика','add_act_payment','act_id'],waybill_payment:['Оплата поставщику','add_waybill_payment','waybill_id']};const [title,action,key]=definitions[kind];
@@ -1004,9 +1049,21 @@
   }
 
   async function refreshOperations(message) {
-    await loadProjectOperationsCloud();
-    render();
+    await ensureModule('operations',true);
     if (message) banner(message, 'ok');
+  }
+
+  async function getProjectFileUrl(kind,item){
+    if(item.fileUrl&&item.fileUrlExpiresAt>Date.now())return item.fileUrl;
+    const data=await operationsApi('get_file_url',{kind,id:item.id});
+    item.fileUrl=data.url||'';
+    item.fileUrlExpiresAt=Date.now()+Math.max(0,Number(data.expires_in||3600)-60)*1000;
+    return item.fileUrl;
+  }
+
+  async function openPrivateProjectFile(kind,item){
+    try{const url=await getProjectFileUrl(kind,item);if(!url)throw new Error('file_unavailable');if(tgApp?.openLink)tgApp.openLink(url);else window.open(url,'_blank','noopener')}
+    catch(error){banner('Не удалось открыть файл: '+error.message,'error')}
   }
 
   const bytesLabel = value => value == null ? '' : value < 1024 * 1024
@@ -1022,7 +1079,7 @@
         <label>Дата документа<input name="documentDate" type="date" value="${esc(item?.documentDate || '')}"></label>
       </div>
       ${item
-        ? (item.fileUrl ? `<a class="btn secondary" href="${esc(item.fileUrl)}" target="_blank" rel="noopener">Открыть файл</a>` : '<div class="empty">Файл временно недоступен</div>')
+        ? '<button type="button" class="btn secondary" data-open-file>Открыть файл</button>'
         : '<label>Файл<input name="file" type="file" required accept="application/pdf,.doc,.docx,.xls,.xlsx,image/jpeg,image/png,image/webp"></label>'}
       <label>Комментарий / описание<textarea name="description" rows="4" maxlength="4000">${esc(item?.description || '')}</textarea></label>
       ${item ? '<button type="button" class="btn danger full-button" data-delete>Удалить документ</button>' : ''}`);
@@ -1033,24 +1090,24 @@
       controls.forEach(control => { control.disabled = true; });
       try {
         if (item) {
-          await operationsApi('save_document', { document: {
+          const data=await operationsApi('save_document', { document: {
             id: item.id,
             title: form.elements.title.value,
             category: form.elements.category.value,
             document_date: form.elements.documentDate.value || null,
             description: form.elements.description.value,
-          }});
+          }});patchMapped('projectDocuments',data.document,mapProjectDocument);
         } else {
-          await uploadProjectFile(form.elements.file.files[0], {
+          const data=await uploadProjectFile(form.elements.file.files[0], {
             kind: 'document', project_id: projectId,
             title: form.elements.title.value,
             category: form.elements.category.value,
             document_date: form.elements.documentDate.value,
             description: form.elements.description.value,
-          });
+          });patchMapped('projectDocuments',data.document,mapProjectDocument);
         }
         dlg.close();
-        await refreshOperations(item ? 'Документ обновлён' : 'Документ загружен');
+        render();banner(item ? 'Документ обновлён' : 'Документ загружен','ok');
       } catch (error) {
         banner('Не удалось сохранить документ: ' + error.message, 'error');
       } finally {
@@ -1061,11 +1118,12 @@
     if (remove) remove.onclick = async () => {
       if (!confirm(`Удалить документ «${item.title}» и его файл?`)) return;
       try {
-        await operationsApi('delete_document', { id: item.id });
+        await operationsApi('delete_document', { id: item.id });removeFromState('projectDocuments',item.id);
         dlg.close();
-        await refreshOperations('Документ удалён');
+        render();banner('Документ удалён','ok');
       } catch (error) { banner('Не удалось удалить документ: ' + error.message, 'error'); }
     };
+    const open=dlg.querySelector('[data-open-file]');if(open)open.onclick=()=>openPrivateProjectFile('document',item);
     dlg.showModal();
   }
 
@@ -1077,7 +1135,7 @@
       <div class="page-title-row"><div><h2>Документы</h2><p>Файлы этого объекта в защищённом хранилище</p></div>${project.status !== 'archived' ? '<button id="addProjectDocument" class="btn primary">+ Документ</button>' : ''}</div>
       <section class="card operation-filter"><label>Категория<select id="documentCategoryFilter"><option value="">Все категории</option>${Object.entries(documentCategoryLabels).map(([value, label]) => `<option value="${value}" ${documentCategoryFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><span>${items.length} файлов</span></section>
       <div class="finance-links card"><div><strong>Финансовые документы</strong><small>Акты и Накладные хранятся в Финансах без дублирования</small></div><button class="btn secondary" data-finance-link="acts">Акты →</button><button class="btn secondary" data-finance-link="waybills">Накладные →</button></div>
-      <div class="document-list">${items.length ? items.map(item => `<button class="card document-card" data-document-id="${esc(item.id)}"><span class="file-icon">${item.mime_type?.startsWith('image/') ? 'IMG' : 'DOC'}</span><span class="grow"><strong>${esc(item.title)}</strong><small>${esc(documentCategoryLabels[item.category] || item.category)} · ${esc(item.original_name || 'Файл')}</small><small>${esc(projectDate((item.documentDate || item.createdAt).slice(0, 10)))} · ${esc(item.authorName)}${item.size_bytes != null ? ' · ' + bytesLabel(item.size_bytes) : ''}</small></span><span class="badge ${item.fileUrl ? 'paid' : 'pending'}">${item.fileUrl ? 'Доступен' : 'Недоступен'}</span></button>`).join('') : '<div class="card empty">Документов в этой категории пока нет</div>'}</div>`;
+      <div class="document-list">${items.length ? items.map(item => `<button class="card document-card" data-document-id="${esc(item.id)}"><span class="file-icon">${item.mime_type?.startsWith('image/') ? 'IMG' : 'DOC'}</span><span class="grow"><strong>${esc(item.title)}</strong><small>${esc(documentCategoryLabels[item.category] || item.category)} · ${esc(item.original_name || 'Файл')}</small><small>${esc(projectDate((item.documentDate || item.createdAt).slice(0, 10)))} · ${esc(item.authorName)}${item.size_bytes != null ? ' · ' + bytesLabel(item.size_bytes) : ''}</small></span><span class="badge paid">Приватный</span></button>`).join('') : '<div class="card empty">Документов в этой категории пока нет</div>'}</div>`;
     document.getElementById('addProjectDocument')?.addEventListener('click', () => openDocumentDialog(project.id));
     document.getElementById('documentCategoryFilter').onchange = event => { documentCategoryFilter = event.target.value; renderProjectDocuments(project); };
     document.querySelectorAll('[data-document-id]').forEach(button => button.onclick = () => openDocumentDialog(project.id, button.dataset.documentId));
@@ -1136,7 +1194,7 @@
       const form = event.currentTarget;
       const [kind, assigneeId] = form.elements.assignee.value.split(':');
       try {
-        await operationsApi('save_task', { task: {
+        const data=await operationsApi('save_task', { task: {
           id: item?.id, project_id: projectId, title: form.elements.title.value,
           description: form.elements.description.value,
           assignee_user_id: kind === 'user' ? assigneeId : null,
@@ -1144,18 +1202,18 @@
           deadline: form.elements.deadline.value || null, priority: form.elements.priority.value,
           status: form.elements.status.value, stage_id: form.elements.stage.value || null,
           act_id: form.elements.act?.value || null, waybill_id: form.elements.waybill?.value || null,
-        }});
+        }});patchMapped('projectTasks',data.task,mapProjectTask);
         dlg.close();
-        await refreshOperations(item ? 'Задача обновлена' : 'Задача добавлена');
+        render();banner(item ? 'Задача обновлена' : 'Задача добавлена','ok');
       } catch (error) { banner('Не удалось сохранить задачу: ' + error.message, 'error'); }
     };
     const remove = dlg.querySelector('[data-delete]');
     if (remove) remove.onclick = async () => {
       if (!confirm(`Удалить задачу «${item.title}»?`)) return;
       try {
-        await operationsApi('delete_task', { id: item.id });
+        await operationsApi('delete_task', { id: item.id });removeFromState('projectTasks',item.id);
         dlg.close();
-        await refreshOperations('Задача удалена');
+        render();banner('Задача удалена','ok');
       } catch (error) { banner('Не удалось удалить задачу: ' + error.message, 'error'); }
     };
     dlg.showModal();
@@ -1180,8 +1238,8 @@
     document.querySelectorAll('[data-complete-task]').forEach(button => button.onclick = async () => {
       const item = all.find(value => value.id === button.dataset.completeTask);
       try {
-        await operationsApi('save_task', { task: taskPayload(item, { status: 'completed' }) });
-        await refreshOperations('Задача выполнена');
+        const data=await operationsApi('save_task', { task: taskPayload(item, { status: 'completed' }) });
+        patchMapped('projectTasks',data.task,mapProjectTask);render();banner('Задача выполнена','ok');
       } catch (error) { banner('Не удалось завершить задачу: ' + error.message, 'error'); }
     });
   }
@@ -1196,7 +1254,7 @@
     const item = (state.projectPhotos || []).find(value => value.id === photoId);
     const stages = stagesFor(projectId);
     const dlg = dynamicDialog('projectPhotoDlg', item ? 'Фото объекта' : 'Добавить фото', `
-      ${item && item.fileUrl ? `<img class="photo-dialog-preview" src="${esc(item.fileUrl)}" alt="${esc(item.caption || 'Фото объекта')}">` : ''}
+      ${item ? '<button type="button" class="btn secondary" data-open-photo>Открыть фото</button>' : ''}
       ${item ? '' : '<label>Фотографии<input name="files" type="file" accept="image/*" multiple required></label>'}
       <label>Этап<select name="stage"><option value="">Без этапа</option>${stages.map(stage => `<option value="${esc(stage.id)}" ${item?.stageId === stage.id ? 'selected' : ''}>${esc(stage.name)}</option>`).join('')}</select></label>
       <label>Дата съёмки<input name="shotDate" type="date" value="${esc(item?.shotDate || '')}"></label>
@@ -1209,23 +1267,23 @@
       submit.disabled = true;
       try {
         if (item) {
-          await operationsApi('save_photo', { photo: {
+          const data=await operationsApi('save_photo', { photo: {
             id: item.id, stage_id: form.elements.stage.value || null,
             shot_date: form.elements.shotDate.value || null, caption: form.elements.caption.value,
-          }});
+          }});patchMapped('projectPhotos',data.photo,mapProjectPhoto);
         } else {
           const files = [...form.elements.files.files];
           for (let index = 0; index < files.length; index += 1) {
             banner(`Загружаю фото ${index + 1} из ${files.length}…`);
             const prepared = await photoUploadFile(files[index]);
-            await uploadProjectFile(prepared, {
+            const data=await uploadProjectFile(prepared, {
               kind: 'photo', project_id: projectId, stage_id: form.elements.stage.value,
               shot_date: form.elements.shotDate.value, caption: form.elements.caption.value,
-            });
+            });patchMapped('projectPhotos',data.photo,mapProjectPhoto);
           }
         }
         dlg.close();
-        await refreshOperations(item ? 'Фото обновлено' : 'Фото загружены');
+        render();banner(item ? 'Фото обновлено' : 'Фото загружены','ok');
       } catch (error) { banner('Не удалось сохранить фото: ' + error.message, 'error'); }
       finally { submit.disabled = false; }
     };
@@ -1233,21 +1291,24 @@
     if (remove) remove.onclick = async () => {
       if (!confirm('Удалить фотографию из объекта и хранилища?')) return;
       try {
-        await operationsApi('delete_photo', { id: item.id });
+        await operationsApi('delete_photo', { id: item.id });removeFromState('projectPhotos',item.id);
         dlg.close();
-        await refreshOperations('Фото удалено');
+        render();banner('Фото удалено','ok');
       } catch (error) { banner('Не удалось удалить фото: ' + error.message, 'error'); }
     };
+    const open=dlg.querySelector('[data-open-photo]');if(open)open.onclick=()=>openPhotoViewer(item);
     dlg.showModal();
   }
 
-  function openPhotoViewer(photo) {
+  async function openPhotoViewer(photo) {
     let dlg = document.getElementById('photoViewerDlg');
     if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'photoViewerDlg'; document.body.appendChild(dlg); }
-    dlg.innerHTML = `<div class="photo-viewer"><button type="button" data-close>Закрыть</button>${photo.fileUrl ? `<img src="${esc(photo.fileUrl)}" alt="${esc(photo.caption || 'Фото объекта')}">` : '<div class="empty">Фото временно недоступно</div>'}<div><strong>${esc(photo.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: photo.stageId })?.name || 'Без этапа')} · ${esc(photo.authorName)}</small></div></div>`;
+    dlg.innerHTML = '<div class="photo-viewer"><button type="button" data-close>Закрыть</button><div class="empty">Загружаем фото…</div></div>';
+    dlg.querySelector('[data-close]').onclick = () => dlg.close();dlg.showModal();
+    try{const url=await getProjectFileUrl('photo',photo);dlg.innerHTML=`<div class="photo-viewer"><button type="button" data-close>Закрыть</button><img src="${esc(url)}" alt="${esc(photo.caption || 'Фото объекта')}"><div><strong>${esc(photo.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: photo.stageId })?.name || 'Без этапа')} · ${esc(photo.authorName)}</small></div></div>`}
+    catch(error){dlg.innerHTML='<div class="photo-viewer"><button type="button" data-close>Закрыть</button><div class="empty">Фото временно недоступно</div></div>'}
     dlg.querySelector('[data-close]').onclick = () => dlg.close();
     dlg.querySelector('img')?.addEventListener('click', () => dlg.close());
-    dlg.showModal();
   }
 
   function renderProjectPhotos(project) {
@@ -1258,7 +1319,7 @@
     $('#projectSection').innerHTML = `
       <div class="page-title-row"><div><h2>Фото объекта</h2><p>Галерея объекта с привязкой к этапам</p></div>${project.status !== 'archived' ? '<button id="addProjectPhoto" class="btn primary">+ Фото</button>' : ''}</div>
       <section class="card operation-filter"><label>Этап<select id="photoStageFilter"><option value="">Все этапы</option>${stages.map(stage => `<option value="${esc(stage.id)}" ${photoStageFilter === stage.id ? 'selected' : ''}>${esc(stage.name)}</option>`).join('')}</select></label><span>${items.length} фото</span></section>
-      <div class="photo-grid">${items.length ? items.map(item => `<article class="card photo-card"><button data-view-photo="${esc(item.id)}">${item.fileUrl ? `<img src="${esc(item.fileUrl)}" alt="${esc(item.caption || 'Фото объекта')}" loading="lazy">` : '<span class="photo-missing">Фото недоступно</span>'}</button><div><strong>${esc(item.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: item.stageId })?.name || 'Без этапа')} · ${esc(projectDate((item.shotDate || item.createdAt).slice(0, 10)))}</small><button class="btn secondary" data-edit-photo="${esc(item.id)}">Изменить</button></div></article>`).join('') : '<div class="card empty">Фотографий по выбранному этапу пока нет</div>'}</div>`;
+      <div class="photo-grid">${items.length ? items.map(item => `<article class="card photo-card"><button data-view-photo="${esc(item.id)}"><span class="photo-missing">Открыть фото</span></button><div><strong>${esc(item.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: item.stageId })?.name || 'Без этапа')} · ${esc(projectDate((item.shotDate || item.createdAt).slice(0, 10)))}</small><button class="btn secondary" data-edit-photo="${esc(item.id)}">Изменить</button></div></article>`).join('') : '<div class="card empty">Фотографий по выбранному этапу пока нет</div>'}</div>`;
     document.getElementById('addProjectPhoto')?.addEventListener('click', () => openProjectPhotoDialog(project.id));
     document.getElementById('photoStageFilter').onchange = event => { photoStageFilter = event.target.value; renderProjectPhotos(project); };
     document.querySelectorAll('[data-view-photo]').forEach(button => button.onclick = () => openPhotoViewer(all.find(item => item.id === button.dataset.viewPhoto)));
@@ -1303,8 +1364,12 @@
     try {
       banner('Удаляю этап…');
       await api('delete_stage', { id });
+      removeFromState('stages',id);
+      for(const item of state.projectTasks||[])if(item.stageId===id)item.stageId='';
+      for(const item of state.projectPhotos||[])if(item.stageId===id)item.stageId='';
+      for(const item of state.masterAssignments||[])if(item.stageId===id)item.stageId='';
       stageDlg.close();
-      await loadCloud();
+      save();render();
       banner('Этап удалён', 'ok');
     } catch (e) { banner('Не удалось удалить этап: ' + e.message, 'error'); }
   }
@@ -1326,7 +1391,14 @@
     if (archive) archive.onclick = () => setProjectArchivedCloud(p.id, !isArchived);
     const operation = document.getElementById('objectOperation');
     if (operation) operation.onclick = () => openExpense(p.id);
-    if (projectSection === 'overview') renderProjectOverview(p);
+    const requiredModule=projectSection==='finance'?'finance':projectSection==='team'?'masters':['documents','tasks','photos'].includes(projectSection)?'operations':null;
+    if(requiredModule&&moduleState[requiredModule].status!=='loaded'){
+      const entry=moduleState[requiredModule];
+      $('#projectSection').innerHTML=`<div class="card empty">${entry.status==='error'?'Не удалось загрузить раздел.':'Загружаем данные раздела…'}${entry.status==='error'?'<br><button class="btn secondary" id="retryProjectModule">Повторить</button>':''}</div>`;
+      const retry=document.getElementById('retryProjectModule');if(retry)retry.onclick=()=>ensureModule(requiredModule,true).catch(()=>{});
+      if(entry.status==='idle')ensureModule(requiredModule).catch(()=>{});
+    }
+    else if (projectSection === 'overview') renderProjectOverview(p);
     else if (projectSection === 'schedule') renderProjectSchedule(p);
     else if (projectSection === 'finance') renderProjectFinance(p);
     else if (projectSection === 'team') renderProjectTeam(p);
@@ -1435,12 +1507,12 @@
           designer_id: optionalValue(pDesigner.value),
         };
         banner(editingProjectId ? 'Сохраняю изменения объекта…' : 'Сохраняю объект…');
-        if (editingProjectId) await api('update_project', { project: { id: editingProjectId, ...project } });
-        else await api('create_project', { project });
+        const data=editingProjectId?await api('update_project', { project: { id: editingProjectId, ...project } }):await api('create_project', { project });
+        patchMapped('projects',data.project,mapProject);
         const wasEditing = !!editingProjectId;
         editingProjectId = null;
         projectDlg.close();
-        await loadCloud();
+        save();render();
         banner(wasEditing ? 'Объект обновлён' : 'Объект сохранён в облаке', 'ok');
       } catch (e) { console.error(e); banner('Не удалось сохранить объект: ' + e.message, 'error'); }
     };
@@ -1466,10 +1538,10 @@
       controls.forEach(control => control.disabled = true);
       try {
         banner(existing ? 'Сохраняю этап…' : 'Добавляю этап…');
-        if (existing) await api('update_stage', { stage: { id: existing.id, ...stage } });
-        else await api('create_stage', { stage });
+        const data=existing?await api('update_stage', { stage: { id: existing.id, ...stage } }):await api('create_stage', { stage });
+        patchMapped('stages',data.stage,mapStage);
         stageDlg.close();
-        await loadCloud();
+        save();render();
         banner(existing ? 'Этап обновлён' : 'Этап добавлен', 'ok');
       } catch (e) { banner('Не удалось сохранить этап: ' + e.message, 'error'); }
       finally { controls.forEach(control => control.disabled = false); }
@@ -1478,8 +1550,8 @@
 
   function openCompanyExpenseDialog(expenseId=''){
     const item=(state.companyExpenses||[]).find(x=>x.id===expenseId);const dlg=dynamicDialog('companyExpenseDlg',item?'Редактировать общий расход':'Новый общий расход',`<div class="grid"><label>Дата<input name="date" type="date" required value="${esc(item?.date||new Date().toISOString().slice(0,10))}"></label><label>Сумма, ₽<input name="amount" type="number" min="0.01" step="0.01" required value="${item?.amount??''}"></label></div><label>Категория<select name="category">${Object.entries(companyCategoryLabels).map(([value,label])=>`<option value="${value}" ${item?.category===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Описание<input name="description" required maxlength="1000" value="${esc(item?.description||'')}"></label><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(item||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(item?.comment||'')}</textarea></label>${item?'<button type="button" class="btn danger full-button" data-delete>Удалить общий расход</button>':''}`);
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'company-expense');await financeApi('save_company_expense',{expense:{id:item?.id,expense_date:form.elements.date.value,amount:Number(form.elements.amount.value),category:form.elements.category.value,description:form.elements.description.value,comment:form.elements.comment.value,file_path:filePath}});dlg.close();await refreshFinance(item?'Общий расход обновлён':'Общий расход добавлен')}catch(e){banner('Не удалось сохранить расход: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm('Удалить общий расход?'))return;try{await financeApi('delete_company_expense',{id:item.id});dlg.close();await refreshFinance('Общий расход удалён')}catch(e){banner('Не удалось удалить расход: '+e.message,'error')}};dlg.showModal();
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'company-expense');const data=await financeApi('save_company_expense',{expense:{id:item?.id,expense_date:form.elements.date.value,amount:Number(form.elements.amount.value),category:form.elements.category.value,description:form.elements.description.value,comment:form.elements.comment.value,file_path:filePath}});patchMapped('companyExpenses',data.expense,mapCompanyExpense);dlg.close();render();banner(item?'Общий расход обновлён':'Общий расход добавлен','ok')}catch(e){banner('Не удалось сохранить расход: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm('Удалить общий расход?'))return;try{await financeApi('delete_company_expense',{id:item.id});removeFromState('companyExpenses',item.id);dlg.close();render();banner('Общий расход удалён','ok')}catch(e){banner('Не удалось удалить расход: '+e.message,'error')}};dlg.showModal();
   }
   function renderCompanyExpenses(content){
     const items=[...(state.companyExpenses||[])].sort((a,b)=>b.date.localeCompare(a.date));content.innerHTML=`<div class="section"><div><h2>Общие расходы ADMA</h2><p class="muted">Не связаны с объектами и уменьшают только прибыль компании</p></div><button id="addCompanyExpense" class="btn primary">+ Расход</button></div><div class="card finance-filters"><label>С даты<input id="generalFrom" type="date"></label><label>По дату<input id="generalTo" type="date"></label><label>Категория<select id="generalCategory"><option value="">Все категории</option>${Object.entries(companyCategoryLabels).map(([value,label])=>`<option value="${value}">${label}</option>`).join('')}</select></label><strong id="generalTotal"></strong></div><div id="generalList" class="finance-list"></div>`;
@@ -1504,6 +1576,7 @@
   }
 
   function installFinanceHandlers() {
+    if(!document.body.dataset.financeFileHandler){document.body.dataset.financeFileHandler='1';document.addEventListener('click',event=>{const button=event.target.closest?.('[data-finance-file]');if(!button)return;event.preventDefault();const [kind,id]=button.dataset.financeFile.split(':');openFinanceFile(kind,id)})}
     const originalOpenExpense = openExpense;
     openExpense = function(pid) {
       if (savingExpense) return;
@@ -1559,14 +1632,14 @@
         let payload = expensePayload();
         payload = await attachNewReceipt(payload);
         banner(editingExpenseId ? 'Сохраняю изменения…' : 'Сохраняю расход…');
-        if (expenseId) await api('update_expense', { expense: payload });
-        else await api('create_expense', { expense: payload });
+        const previous=expenseId?state.expenses.find(x=>x.id===expenseId):null;
+        const data=expenseId?await api('update_expense', { expense: payload }):await api('create_expense', { expense: payload });
+        const mapped=patchMapped('expenses',data.expense,mapExpense);if(previous?.author&&!data.expense.author)mapped.author=previous.author;
         editingExpenseId = null;
         state.receipt = null;
         clearSelectedReceipt();
         expenseDlg.close();
-        try { await loadCloud(); }
-        catch { banner('Расход сохранён, но список не обновился. Перезапустите приложение.', 'error'); return; }
+        save();render();
         banner(payload.receipt_path ? 'Сохранено в облаке вместе с чеком' : 'Сохранено в облаке', 'ok');
       } catch (e) { console.error(e); banner('Не удалось сохранить расход: ' + e.message, 'error'); }
       finally {
@@ -1578,6 +1651,7 @@
 
     const originalDetails = details;
     details = function(i) {
+      const cached=state.expenses.find(x=>x.id===i);if(cached?.receipt&&cached.receiptExpiresAt<=Date.now())cached.receipt=null;
       originalDetails(i);
       const ex = state.expenses.find(x => x.id === i);
       if (!ex) return;
@@ -1586,6 +1660,7 @@
       const delBtn = document.getElementById('del');
       const infoCard = document.querySelector('#detail .card');
       if (infoCard && ex.author) infoCard.insertAdjacentHTML('beforeend', `<p><small class="muted">Автор</small><br>${esc(ex.author)}</p>`);
+      if(ex.receiptPath&&!ex.receipt){const receiptButton=document.createElement('button');receiptButton.className='btn secondary full-button';receiptButton.textContent='Открыть чек';receiptButton.onclick=async()=>{receiptButton.disabled=true;try{const data=await api('get_receipt_url',{id:ex.id});ex.receipt=data.url||null;ex.receiptExpiresAt=Date.now()+Math.max(0,Number(data.expires_in||3600)-60)*1000;if(!ex.receipt)throw new Error('receipt_unavailable');const img=document.createElement('img');img.className='receipt';img.src=ex.receipt;receiptButton.replaceWith(img)}catch(e){receiptButton.disabled=false;banner('Не удалось открыть чек: '+e.message,'error')}};infoCard.insertAdjacentElement('afterend',receiptButton)}
       const actions = delBtn?.parentElement || editBtn?.parentElement;
       if (actions && delBtn) {
         const topRow = document.createElement('div');
@@ -1612,9 +1687,9 @@
       if (paid) paid.onclick = async () => {
         try {
           banner('Отмечаю компенсацию…');
-          await api('mark_reimbursed', { id: i });
+          const data=await api('mark_reimbursed', { id: i });patchMapped('expenses',data.expense,mapExpense);
           detailDlg.close();
-          await loadCloud();
+          save();render();
           banner('Компенсация отмечена', 'ok');
         } catch (e) { banner('Ошибка: ' + e.message, 'error'); }
       };
@@ -1622,9 +1697,9 @@
         if (!confirm('Удалить расход?')) return;
         try {
           banner('Удаляю расход…');
-          await api('delete_expense', { id: i });
+          await api('delete_expense', { id: i });removeFromState('expenses',i);
           detailDlg.close();
-          await loadCloud();
+          save();render();
           banner('Расход и его чек удалены', 'ok');
         } catch (e) { banner('Ошибка: ' + e.message, 'error'); }
       };
@@ -1641,8 +1716,8 @@
     $('#app').innerHTML = `${pageHeader(`ADMA · ${title.toUpperCase()}`, title, 'Раздел встроен в единую структуру приложения')}${moduleScreen(icon, title, description, relation)}`;
   }
 
-  function knowledgeAttachmentHtml(entity,id){const files=knowledgeAttachmentsFor(entity,id);return `<div class="knowledge-attachments">${files.map(file=>`<div class="knowledge-attachment"><a href="${esc(file.fileUrl||'#')}" ${file.fileUrl?'target="_blank" rel="noopener"':''}><span class="file-icon">${file.mime_type?.startsWith('image/')?'IMG':'DOC'}</span><span><strong>${esc(file.original_name||'Файл')}</strong><small>${esc(bytesLabel(file.size_bytes))}</small></span></a><button type="button" class="btn danger" data-delete-knowledge-attachment="${esc(file.id)}" aria-label="Удалить вложение">×</button></div>`).join('')}${files.length?'':'<div class="empty compact-empty">Вложений пока нет</div>'}</div>`}
-  function bindKnowledgeAttachmentDeletes(dlg){dlg.querySelectorAll('[data-delete-knowledge-attachment]').forEach(button=>button.onclick=async()=>{if(!confirm('Удалить это вложение?'))return;button.disabled=true;try{await knowledgeApi('delete_attachment',{id:button.dataset.deleteKnowledgeAttachment});await loadKnowledgeCloud();const row=button.closest('.knowledge-attachment');if(row)row.remove();banner('Вложение удалено','ok')}catch(error){button.disabled=false;banner('Не удалось удалить вложение: '+error.message,'error')}})}
+  function knowledgeAttachmentHtml(entity,id){const files=knowledgeAttachmentsFor(entity,id);return `<div class="knowledge-attachments">${files.map(file=>`<div class="knowledge-attachment"><button type="button" data-open-knowledge-attachment="${esc(file.id)}"><span class="file-icon">${file.mime_type?.startsWith('image/')?'IMG':'DOC'}</span><span><strong>${esc(file.original_name||'Файл')}</strong><small>${esc(bytesLabel(file.size_bytes))}</small></span></button><button type="button" class="btn danger" data-delete-knowledge-attachment="${esc(file.id)}" aria-label="Удалить вложение">×</button></div>`).join('')}${files.length?'':'<div class="empty compact-empty">Вложений пока нет</div>'}</div>`}
+  function bindKnowledgeAttachmentDeletes(dlg){dlg.querySelectorAll('[data-open-knowledge-attachment]').forEach(button=>button.onclick=async()=>{const file=(state.knowledgeAttachments||[]).find(x=>x.id===button.dataset.openKnowledgeAttachment);if(!file)return;button.disabled=true;try{if(!file.fileUrl||file.fileUrlExpiresAt<=Date.now()){const data=await knowledgeApi('get_file_url',{id:file.id});file.fileUrl=data.url||'';file.fileUrlExpiresAt=Date.now()+Math.max(0,Number(data.expires_in||3600)-60)*1000}if(!file.fileUrl)throw new Error('file_unavailable');if(tgApp?.openLink)tgApp.openLink(file.fileUrl);else window.open(file.fileUrl,'_blank','noopener')}catch(error){banner('Не удалось открыть вложение: '+error.message,'error')}finally{button.disabled=false}});dlg.querySelectorAll('[data-delete-knowledge-attachment]').forEach(button=>button.onclick=async()=>{if(!confirm('Удалить это вложение?'))return;button.disabled=true;try{await knowledgeApi('delete_attachment',{id:button.dataset.deleteKnowledgeAttachment});removeFromState('knowledgeAttachments',button.dataset.deleteKnowledgeAttachment);const row=button.closest('.knowledge-attachment');if(row)row.remove();banner('Вложение удалено','ok')}catch(error){button.disabled=false;banner('Не удалось удалить вложение: '+error.message,'error')}})}
   function checklistRow(value=''){return `<div class="knowledge-check-row"><span class="knowledge-check-icon">☐</span><input name="checkItem" maxlength="1000" required value="${esc(value)}" placeholder="Пункт инструкции"><span class="knowledge-order"><button type="button" data-move="up" aria-label="Выше">↑</button><button type="button" data-move="down" aria-label="Ниже">↓</button><button type="button" data-remove aria-label="Удалить">×</button></span></div>`}
   function bindChecklistEditor(dlg){const list=dlg.querySelector('[data-checklist]');dlg.querySelector('[data-add-check]').onclick=()=>{list.insertAdjacentHTML('beforeend',checklistRow());list.lastElementChild.querySelector('input').focus()};list.onclick=event=>{const row=event.target.closest('.knowledge-check-row');if(!row)return;if(event.target.matches('[data-remove]'))row.remove();if(event.target.matches('[data-move="up"]')&&row.previousElementSibling)list.insertBefore(row,row.previousElementSibling);if(event.target.matches('[data-move="down"]')&&row.nextElementSibling)list.insertBefore(row.nextElementSibling,row)}}
   function openTechCardDialog(cardId=''){const item=(state.knowledgeTechCards||[]).find(x=>x.id===cardId),checklist=item?knowledgeItemsFor(item.id):[];const dlg=dynamicDialog('knowledgeTechDlg',item?'Техкарта':'Новая техкарта',`
@@ -1652,16 +1727,16 @@
     <section class="knowledge-checklist-editor"><div class="section compact"><div><h2>Чек-лист</h2><p>Шаблон инструкции без отметок выполнения</p></div><button type="button" class="btn secondary" data-add-check>+ Пункт</button></div><div data-checklist>${checklist.map(x=>checklistRow(x.text)).join('')}</div></section>
     <label>Добавить фото / файлы<input name="files" type="file" multiple accept="application/pdf,.doc,.docx,.xls,.xlsx,image/jpeg,image/png,image/webp"></label>
     ${item?`<div class="knowledge-meta">Создана ${knowledgeDate(item.createdAt)} · обновлена ${knowledgeDate(item.updatedAt)}</div>${knowledgeAttachmentHtml('tech_card',item.id)}<button type="button" class="btn danger full-button" data-delete>Удалить техкарту</button>`:''}`);
-    bindChecklistEditor(dlg);bindKnowledgeAttachmentDeletes(dlg);dlg.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,controls=[...form.querySelectorAll('input,textarea,button')];controls.forEach(x=>x.disabled=true);try{const result=await knowledgeApi('save_tech_card',{tech_card:{id:item?.id,title:form.elements.title.value,category:form.elements.category.value,description:form.elements.description.value},checklist_items:[...form.querySelectorAll('[name="checkItem"]')].map(input=>({text:input.value}))});const files=[...form.elements.files.files];for(const file of files)await uploadKnowledgeFile(file,'tech_card',result.tech_card.id);dlg.close();await refreshKnowledge(item?'Техкарта обновлена':'Техкарта создана')}catch(error){banner('Не удалось сохранить техкарту: '+error.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const remove=dlg.querySelector('[data-delete]');if(remove)remove.onclick=async()=>{if(!confirm(`Удалить техкарту «${item.title}» и её вложения?`))return;try{await knowledgeApi('delete_tech_card',{id:item.id});dlg.close();await refreshKnowledge('Техкарта удалена')}catch(error){banner('Не удалось удалить техкарту: '+error.message,'error')}};dlg.showModal()}
+    bindChecklistEditor(dlg);bindKnowledgeAttachmentDeletes(dlg);dlg.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,controls=[...form.querySelectorAll('input,textarea,button')];controls.forEach(x=>x.disabled=true);try{const result=await knowledgeApi('save_tech_card',{tech_card:{id:item?.id,title:form.elements.title.value,category:form.elements.category.value,description:form.elements.description.value},checklist_items:[...form.querySelectorAll('[name="checkItem"]')].map(input=>({text:input.value}))});patchMapped('knowledgeTechCards',result.tech_card,mapKnowledgeTechCard);state.knowledgeChecklistItems=(state.knowledgeChecklistItems||[]).filter(x=>x.techCardId!==result.tech_card.id);state.knowledgeChecklistItems.push(...(result.checklist_items||[]).map(mapKnowledgeChecklistItem));for(const file of [...form.elements.files.files]){const uploaded=await uploadKnowledgeFile(file,'tech_card',result.tech_card.id);patchMapped('knowledgeAttachments',uploaded.attachment,mapKnowledgeAttachment)}dlg.close();render();banner(item?'Техкарта обновлена':'Техкарта создана','ok')}catch(error){banner('Не удалось сохранить техкарту: '+error.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const remove=dlg.querySelector('[data-delete]');if(remove)remove.onclick=async()=>{if(!confirm(`Удалить техкарту «${item.title}» и её вложения?`))return;try{await knowledgeApi('delete_tech_card',{id:item.id});removeFromState('knowledgeTechCards',item.id);state.knowledgeChecklistItems=(state.knowledgeChecklistItems||[]).filter(x=>x.techCardId!==item.id);state.knowledgeAttachments=(state.knowledgeAttachments||[]).filter(x=>x.techCardId!==item.id);dlg.close();render();banner('Техкарта удалена','ok')}catch(error){banner('Не удалось удалить техкарту: '+error.message,'error')}};dlg.showModal()}
   function openKnowledgeIssueDialog(issueId=''){const item=(state.knowledgeIssues||[]).find(x=>x.id===issueId);const dlg=dynamicDialog('knowledgeIssueDlg',item?'Косяк':'Новый косяк',`
     <label>Название проблемы<input name="title" required maxlength="240" value="${esc(item?.title||'')}" placeholder="Трещина в месте примыкания ГКЛ"></label>
     <label>Этап / категория<input name="category" list="knowledgeIssueCategories" required maxlength="160" value="${esc(item?.category||'')}"><datalist id="knowledgeIssueCategories">${knowledgeCategories().map(x=>`<option value="${esc(x)}">`).join('')}</datalist></label>
     <label>Что произошло<textarea name="problem" rows="4" maxlength="12000">${esc(item?.problem||'')}</textarea></label><label>Причина<textarea name="cause" rows="4" maxlength="12000">${esc(item?.cause||'')}</textarea></label><label>Как исправили / способ решения<textarea name="solution" rows="4" maxlength="12000">${esc(item?.solution||'')}</textarea></label><label>Как не допустить повторения<textarea name="prevention" rows="4" maxlength="12000">${esc(item?.prevention||'')}</textarea></label>
     <label>Добавить фото / файлы<input name="files" type="file" multiple accept="application/pdf,.doc,.docx,.xls,.xlsx,image/jpeg,image/png,image/webp"></label>
     ${item?`<div class="knowledge-meta">Создан ${knowledgeDate(item.createdAt)} · обновлён ${knowledgeDate(item.updatedAt)}</div>${knowledgeAttachmentHtml('issue',item.id)}<button type="button" class="btn danger full-button" data-delete>Удалить косяк</button>`:''}`);
-    bindKnowledgeAttachmentDeletes(dlg);dlg.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,controls=[...form.querySelectorAll('input,textarea,button')];controls.forEach(x=>x.disabled=true);try{const result=await knowledgeApi('save_issue',{issue:{id:item?.id,title:form.elements.title.value,category:form.elements.category.value,problem:form.elements.problem.value,cause:form.elements.cause.value,solution:form.elements.solution.value,prevention:form.elements.prevention.value}});for(const file of [...form.elements.files.files])await uploadKnowledgeFile(file,'issue',result.issue.id);dlg.close();await refreshKnowledge(item?'Косяк обновлён':'Косяк создан')}catch(error){banner('Не удалось сохранить косяк: '+error.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const remove=dlg.querySelector('[data-delete]');if(remove)remove.onclick=async()=>{if(!confirm(`Удалить косяк «${item.title}» и его вложения?`))return;try{await knowledgeApi('delete_issue',{id:item.id});dlg.close();await refreshKnowledge('Косяк удалён')}catch(error){banner('Не удалось удалить косяк: '+error.message,'error')}};dlg.showModal()}
+    bindKnowledgeAttachmentDeletes(dlg);dlg.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,controls=[...form.querySelectorAll('input,textarea,button')];controls.forEach(x=>x.disabled=true);try{const result=await knowledgeApi('save_issue',{issue:{id:item?.id,title:form.elements.title.value,category:form.elements.category.value,problem:form.elements.problem.value,cause:form.elements.cause.value,solution:form.elements.solution.value,prevention:form.elements.prevention.value}});patchMapped('knowledgeIssues',result.issue,mapKnowledgeIssue);for(const file of [...form.elements.files.files]){const uploaded=await uploadKnowledgeFile(file,'issue',result.issue.id);patchMapped('knowledgeAttachments',uploaded.attachment,mapKnowledgeAttachment)}dlg.close();render();banner(item?'Косяк обновлён':'Косяк создан','ok')}catch(error){banner('Не удалось сохранить косяк: '+error.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const remove=dlg.querySelector('[data-delete]');if(remove)remove.onclick=async()=>{if(!confirm(`Удалить косяк «${item.title}» и его вложения?`))return;try{await knowledgeApi('delete_issue',{id:item.id});removeFromState('knowledgeIssues',item.id);state.knowledgeAttachments=(state.knowledgeAttachments||[]).filter(x=>x.issueId!==item.id);dlg.close();render();banner('Косяк удалён','ok')}catch(error){banner('Не удалось удалить косяк: '+error.message,'error')}};dlg.showModal()}
   function renderKnowledgeCloud(){const tech=knowledgeSection==='tech',source=tech?(state.knowledgeTechCards||[]):(state.knowledgeIssues||[]),query=knowledgeSearch.toLocaleLowerCase('ru');const items=source.filter(item=>{if(knowledgeCategory&&item.category!==knowledgeCategory)return false;const text=tech?[item.title,item.category,item.description,...knowledgeItemsFor(item.id).map(x=>x.text)].join(' '):[item.title,item.category,item.problem,item.cause,item.solution,item.prevention].join(' ');return!query||text.toLocaleLowerCase('ru').includes(query)});const action=tech?'+ Добавить техкарту':'+ Добавить косяк';$('#app').innerHTML=`${pageHeader('ADMA · ОПЫТ','База знаний','Технологии и решения ADMA',`<button id="addKnowledge" class="btn primary">${action}</button>`)}${sectionTabs([['tech','Техкарты'],['issues','Косяки']],knowledgeSection,'data-knowledge-section')}<section class="knowledge-filters"><label>Поиск<input id="knowledgeSearch" type="search" value="${esc(knowledgeSearch)}" placeholder="Название, этап или содержание"></label><label>Этап / категория<select id="knowledgeCategory"><option value="">Все категории</option>${knowledgeCategories().map(x=>`<option value="${esc(x)}" ${knowledgeCategory===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label><span>${items.length} записей</span></section><div class="knowledge-list">${items.map(item=>tech?`<button class="card knowledge-card" data-tech-card="${esc(item.id)}"><span class="knowledge-card-icon">▤</span><span class="grow"><span class="badge neutral">${esc(item.category)}</span><strong>${esc(item.title)}</strong><small>${esc(knowledgeExcerpt(item.description)||'Описание не добавлено')}</small><span class="knowledge-card-meta">${knowledgeItemsFor(item.id).length} пунктов · обновлено ${knowledgeDate(item.updatedAt)}</span></span></button>`:`<button class="card knowledge-card issue" data-issue="${esc(item.id)}"><span class="knowledge-card-icon">!</span><span class="grow"><span class="badge pending">${esc(item.category)}</span><strong>${esc(item.title)}</strong><small>${esc(knowledgeExcerpt(item.problem)||'Описание проблемы не добавлено')}</small><span class="knowledge-card-meta">Обновлено ${knowledgeDate(item.updatedAt)}</span></span></button>`).join('')||`<div class="card empty">${tech?'Техкарт':'Косяков'} по выбранным условиям пока нет</div>`}</div>`;document.querySelectorAll('[data-knowledge-section]').forEach(button=>button.onclick=()=>{knowledgeSection=button.dataset.knowledgeSection;knowledgeSearch='';knowledgeCategory='';renderKnowledgeCloud()});document.getElementById('knowledgeSearch').oninput=event=>{knowledgeSearch=event.target.value;renderKnowledgeCloud();const input=document.getElementById('knowledgeSearch');input.focus();input.setSelectionRange(knowledgeSearch.length,knowledgeSearch.length)};document.getElementById('knowledgeCategory').onchange=event=>{knowledgeCategory=event.target.value;renderKnowledgeCloud()};document.getElementById('addKnowledge').onclick=()=>tech?openTechCardDialog():openKnowledgeIssueDialog();document.querySelectorAll('[data-tech-card]').forEach(button=>button.onclick=()=>openTechCardDialog(button.dataset.techCard));document.querySelectorAll('[data-issue]').forEach(button=>button.onclick=()=>openKnowledgeIssueDialog(button.dataset.issue))}
 
   function renderMastersCloud(){
@@ -1680,18 +1755,18 @@
   const designerOverdue=d=>!!d.nextContactAt&&!d.isArchived&&!designerTerminalStatuses.has(d.status)&&new Date(d.nextContactAt).getTime()<Date.now();
   const designerStatusClass=d=>designerOverdue(d)?'danger':['agreed','referred_lead','has_project'].includes(d.status)?'paid':designerTerminalStatuses.has(d.status)?'neutral':'pending';
   const safeContactLink=(kind,value)=>{const raw=String(value||'').trim();if(!raw)return'';let href=raw,label=raw;if(kind==='instagram'){const handle=raw.replace(/^https?:\/\/(www\.)?instagram\.com\//i,'').replace(/^@/,'').replace(/\/$/,'');href=`https://instagram.com/${encodeURIComponent(handle)}`;label='Instagram'}else if(kind==='telegram'){const handle=raw.replace(/^https?:\/\/t\.me\//i,'').replace(/^@/,'').replace(/\/$/,'');href=`https://t.me/${encodeURIComponent(handle)}`;label='Telegram'}else if(kind==='phone'){href='tel:'+raw.replace(/[^+\d]/g,'');label=raw}else if(kind==='email'){href='mailto:'+raw;label=raw}else if(!/^https?:\/\//i.test(href))href='https://'+href;return `<a class="btn secondary" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`};
-  async function refreshDesigners(message){await loadDesignersCloud();render();if(message)banner(message,'ok')}
+  async function refreshDesigners(message){await ensureModule('designers',true);if(message)banner(message,'ok')}
 
   function openDesignerDialog(designerId=''){
     if(!canManageProjects())return;const d=(state.designers||[]).find(x=>x.id===designerId);const users=state.designerUsers||[];
     const dlg=dynamicDialog('designerEditDlg',d?'Редактировать дизайнера':'Новый дизайнер',`<label>Имя и фамилия<input name="fullName" required maxlength="200" value="${esc(d?.fullName||'')}"></label><div class="grid"><label>Студия<input name="studio" maxlength="200" value="${esc(d?.studio||'')}"></label><label>Город<input name="city" maxlength="160" value="${esc(d?.city||'')}"></label></div><div class="grid"><label>Instagram<input name="instagram" maxlength="300" placeholder="@username" value="${esc(d?.instagram||'')}"></label><label>Telegram<input name="telegram" maxlength="200" placeholder="@username" value="${esc(d?.telegram||'')}"></label></div><div class="grid"><label>Телефон<input name="phone" type="tel" maxlength="80" value="${esc(d?.phone||'')}"></label><label>Email<input name="email" type="email" maxlength="240" value="${esc(d?.email||'')}"></label></div><div class="grid"><label>Сайт<input name="website" maxlength="500" value="${esc(d?.website||'')}"></label><label>Портфолио<input name="portfolio" maxlength="500" value="${esc(d?.portfolioUrl||'')}"></label></div><div class="grid"><label>Статус<select name="status">${Object.entries(designerStatusLabels).map(([v,l])=>`<option value="${v}" ${d?.status===v?'selected':''}>${l}</option>`).join('')}</select></label><label>Приоритет<select name="priority">${Object.entries(designerPriorityLabels).map(([v,l])=>`<option value="${v}" ${(d?.priority||'normal')===v?'selected':''}>${l}</option>`).join('')}</select></label></div><label>Ответственный<select name="responsible"><option value="">Не назначен</option>${users.map(u=>`<option value="${esc(u.id)}" ${d?.responsibleUserId===u.id?'selected':''}>${esc(responsibleName(u))}</option>`).join('')}</select></label><div class="grid"><label>Следующий контакт<input name="nextContact" type="datetime-local" value="${esc(localDateTime(d?.nextContactAt))}"></label><label>Следующее действие<input name="nextAction" maxlength="1000" value="${esc(d?.nextAction||'')}"></label></div><div class="grid"><label>Источник<input name="source" maxlength="200" value="${esc(d?.source||'')}"></label><label>Теги<input name="tags" maxlength="500" placeholder="премиум, Москва" value="${esc((d?.tags||[]).join(', '))}"></label></div><label>Заметки<textarea name="notes" rows="4" maxlength="5000">${esc(d?.notes||'')}</textarea></label>${d?`<button type="button" class="btn ${d.isArchived?'secondary':'danger'} full-button" data-designer-archive>${d.isArchived?'Вернуть в работу':'Архивировать'}</button>`:''}`);
     const payload=form=>({id:d?.id,full_name:form.elements.fullName.value,studio:form.elements.studio.value,city:form.elements.city.value,instagram:form.elements.instagram.value,telegram:form.elements.telegram.value,phone:form.elements.phone.value,email:form.elements.email.value,website:form.elements.website.value,portfolio_url:form.elements.portfolio.value,status:form.elements.status.value,priority:form.elements.priority.value,responsible_user_id:form.elements.responsible.value||null,next_contact_at:form.elements.nextContact.value?new Date(form.elements.nextContact.value).toISOString():null,next_action:form.elements.nextAction.value,source:form.elements.source.value,tags:form.elements.tags.value.split(',').map(x=>x.trim()).filter(Boolean),notes:form.elements.notes.value});
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{try{await designersApi('save_designer',{designer:payload(form)})}catch(e){if(e.message!=='possible_duplicate')throw e;if(!confirm('Похожий дизайнер уже есть в базе. Всё равно сохранить отдельную карточку?'))return;await designersApi('save_designer',{designer:payload(form),allow_duplicate:true})}dlg.close();await refreshDesigners(d?'Дизайнер обновлён':'Дизайнер добавлен')}catch(e){banner('Не удалось сохранить дизайнера: '+e.message,'error')}finally{button.disabled=false}};
-    const archive=dlg.querySelector('[data-designer-archive]');if(archive)archive.onclick=async()=>{if(!confirm(d.isArchived?'Вернуть дизайнера в работу?':'Архивировать дизайнера? Связи с объектами и история сохранятся.'))return;try{await designersApi('archive_designer',{id:d.id,archived:!d.isArchived});dlg.close();await refreshDesigners(d.isArchived?'Дизайнер восстановлен':'Дизайнер архивирован')}catch(e){banner('Не удалось изменить статус: '+e.message,'error')}};dlg.showModal();
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{let data;try{data=await designersApi('save_designer',{designer:payload(form)})}catch(e){if(e.message!=='possible_duplicate')throw e;if(!confirm('Похожий дизайнер уже есть в базе. Всё равно сохранить отдельную карточку?'))return;data=await designersApi('save_designer',{designer:payload(form),allow_duplicate:true})}patchMapped('designers',data.designer,mapDesigner);dlg.close();render();banner(d?'Дизайнер обновлён':'Дизайнер добавлен','ok')}catch(e){banner('Не удалось сохранить дизайнера: '+e.message,'error')}finally{button.disabled=false}};
+    const archive=dlg.querySelector('[data-designer-archive]');if(archive)archive.onclick=async()=>{if(!confirm(d.isArchived?'Вернуть дизайнера в работу?':'Архивировать дизайнера? Связи с объектами и история сохранятся.'))return;try{const data=await designersApi('archive_designer',{id:d.id,archived:!d.isArchived});patchMapped('designers',data.designer,mapDesigner);dlg.close();render();banner(d.isArchived?'Дизайнер восстановлен':'Дизайнер архивирован','ok')}catch(e){banner('Не удалось изменить статус: '+e.message,'error')}};dlg.showModal();
   }
 
   function openDesignerInteractionDialog(designerId){
-    const dlg=dynamicDialog('designerInteractionDlg','Добавить взаимодействие',`<div class="grid"><label>Тип<select name="type">${Object.entries(designerInteractionLabels).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label><label>Дата и время<input name="occurred" type="datetime-local" required value="${esc(localDateTime(new Date().toISOString()))}"></label></div><label>Направление<select name="direction"><option value="">Не указано</option><option value="outgoing">Исходящее</option><option value="incoming">Входящее</option></select></label><label>Комментарий<textarea name="comment" rows="4" required maxlength="3000"></textarea></label><label>Результат<input name="result" maxlength="1000"></label>`);dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{await designersApi('add_interaction',{interaction:{designer_id:designerId,interaction_type:form.elements.type.value,occurred_at:new Date(form.elements.occurred.value).toISOString(),direction:form.elements.direction.value||null,comment:form.elements.comment.value,result:form.elements.result.value}});dlg.close();await refreshDesigners('Взаимодействие добавлено');openDesignerDetails(designerId)}catch(e){banner('Не удалось добавить взаимодействие: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal();
+    const dlg=dynamicDialog('designerInteractionDlg','Добавить взаимодействие',`<div class="grid"><label>Тип<select name="type">${Object.entries(designerInteractionLabels).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label><label>Дата и время<input name="occurred" type="datetime-local" required value="${esc(localDateTime(new Date().toISOString()))}"></label></div><label>Направление<select name="direction"><option value="">Не указано</option><option value="outgoing">Исходящее</option><option value="incoming">Входящее</option></select></label><label>Комментарий<textarea name="comment" rows="4" required maxlength="3000"></textarea></label><label>Результат<input name="result" maxlength="1000"></label>`);dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,button=form.querySelector('.primary');button.disabled=true;try{const data=await designersApi('add_interaction',{interaction:{designer_id:designerId,interaction_type:form.elements.type.value,occurred_at:new Date(form.elements.occurred.value).toISOString(),direction:form.elements.direction.value||null,comment:form.elements.comment.value,result:form.elements.result.value}});patchMapped('designerInteractions',data.interaction,mapDesignerInteraction);patchMapped('designers',data.designer,mapDesigner);dlg.close();render();banner('Взаимодействие добавлено','ok');openDesignerDetails(designerId)}catch(e){banner('Не удалось добавить взаимодействие: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal();
   }
 
   function openDesignerDetails(designerId){
@@ -1705,18 +1780,18 @@
   const leadResponsible=x=>responsibleName((state.leadUsers||[]).find(u=>u.id===x.responsibleUserId));
   const leadTerminal=x=>x.status==='lost'||(x.status==='contract'&&x.projectId);
   const leadOverdue=x=>!!x.nextContactAt&&!leadTerminal(x)&&new Date(x.nextContactAt).getTime()<Date.now();
-  async function refreshLeads(message){await Promise.all([loadLeadsCloud(),loadDesignersCloud()]);render();if(message)banner(message,'ok')}
+  async function refreshLeads(message){await Promise.all([ensureModule('leads',true),ensureModule('designers',true)]);if(message)banner(message,'ok')}
 
   function openLeadDialog(leadId=''){
     if(!canManageProjects())return;const x=(state.leads||[]).find(v=>v.id===leadId),designers=(state.designers||[]).filter(d=>!d.isArchived);const dlg=dynamicDialog('leadEditDlg',x?'Редактировать заявку':'Новая заявка',`<label>Клиент<input name="clientName" required maxlength="200" value="${esc(x?.clientName||'')}"></label><div class="grid"><label>Телефон<input name="phone" type="tel" maxlength="80" value="${esc(x?.phone||'')}"></label><label>Telegram<input name="telegram" maxlength="200" placeholder="@username" value="${esc(x?.telegram||'')}"></label></div><label>Email<input name="email" type="email" maxlength="240" value="${esc(x?.email||'')}"></label><label>Объект / ЖК<input name="projectName" required maxlength="240" value="${esc(x?.projectName||'')}"></label><label>Адрес<input name="address" maxlength="400" value="${esc(x?.address||'')}"></label><div class="grid"><label>Площадь, м²<input name="area" type="number" min="1" max="100000" step="0.01" value="${x?.area??''}"></label><label>Бюджет, ₽<input name="budget" type="number" min="0" step="1" value="${x?.budget??''}"></label></div><div class="grid"><label>Дизайн-проект<select name="hasDesign"><option value="">Неизвестно</option><option value="yes" ${x?.hasDesignProject===true?'selected':''}>Есть</option><option value="no" ${x?.hasDesignProject===false?'selected':''}>Нет</option></select></label><label>Желаемый старт<input name="desiredStart" type="date" value="${esc(x?.desiredStartDate||'')}"></label></div><label>Ссылка на дизайн-проект<input name="designUrl" maxlength="800" value="${esc(x?.designProjectUrl||'')}"></label><div class="grid"><label>Источник<select name="source">${Object.entries(leadSourceLabels).map(([v,l])=>`<option value="${v}" ${(x?.source||'other')===v?'selected':''}>${l}</option>`).join('')}</select></label><label>Статус<select name="status">${Object.entries(leadStatusLabels).map(([v,l])=>`<option value="${v}" ${(x?.status||'new')===v?'selected':''}>${l}</option>`).join('')}</select></label></div><label data-lead-designer>Дизайнер<select name="designer"><option value="">Выберите дизайнера</option>${designers.map(d=>`<option value="${esc(d.id)}" ${x?.designerId===d.id?'selected':''}>${esc(designerName(d))}${d.studio?' · '+esc(d.studio):''}</option>`).join('')}</select></label><div class="grid"><label>Ответственный<select name="responsible"><option value="">Не назначен</option>${(state.leadUsers||[]).map(u=>`<option value="${esc(u.id)}" ${x?.responsibleUserId===u.id?'selected':''}>${esc(responsibleName(u))}</option>`).join('')}</select></label><label>Приоритет<select name="priority">${Object.entries(designerPriorityLabels).map(([v,l])=>`<option value="${v}" ${(x?.priority||'normal')===v?'selected':''}>${l}</option>`).join('')}</select></label></div><div class="grid"><label>Следующий контакт<input name="nextContact" type="datetime-local" value="${esc(localDateTime(x?.nextContactAt))}"></label><label>Следующее действие<input name="nextAction" maxlength="1000" value="${esc(x?.nextAction||'')}"></label></div><div data-lead-loss><label>Причина проигрыша<select name="lossReason"><option value="">Выберите причину</option>${Object.entries(leadLossLabels).map(([v,l])=>`<option value="${v}" ${x?.lossReason===v?'selected':''}>${l}</option>`).join('')}</select></label><label>Комментарий к причине<textarea name="lossComment" rows="2" maxlength="2000">${esc(x?.lossComment||'')}</textarea></label></div><label>Комментарий<textarea name="comment" rows="4" maxlength="5000">${esc(x?.comment||'')}</textarea></label>`);
     const form=dlg.querySelector('form'),sync=()=>{dlg.querySelector('[data-lead-designer]').hidden=form.elements.source.value!=='designer';dlg.querySelector('[data-lead-loss]').hidden=form.elements.status.value!=='lost';form.elements.lossReason.required=form.elements.status.value==='lost';form.elements.designer.required=form.elements.source.value==='designer'};form.elements.source.onchange=sync;form.elements.status.onchange=sync;sync();
     const payload=()=>({id:x?.id,client_name:form.elements.clientName.value,phone:form.elements.phone.value,telegram:form.elements.telegram.value,email:form.elements.email.value,project_name:form.elements.projectName.value,address:form.elements.address.value,area_sqm:form.elements.area.value||null,estimated_budget:form.elements.budget.value||null,has_design_project:form.elements.hasDesign.value===''?null:form.elements.hasDesign.value==='yes',design_project_url:form.elements.designUrl.value,desired_start_date:form.elements.desiredStart.value||null,source:form.elements.source.value,designer_id:form.elements.source.value==='designer'?form.elements.designer.value:null,responsible_user_id:form.elements.responsible.value||null,status:form.elements.status.value,priority:form.elements.priority.value,next_contact_at:form.elements.nextContact.value?new Date(form.elements.nextContact.value).toISOString():null,next_action:form.elements.nextAction.value,loss_reason:form.elements.lossReason.value||null,loss_comment:form.elements.lossComment.value,comment:form.elements.comment.value});
-    form.onsubmit=async ev=>{ev.preventDefault();const button=form.querySelector('.primary');button.disabled=true;try{try{await leadsApi('save_lead',{lead:payload()})}catch(e){if(e.message!=='possible_duplicate')throw e;if(!confirm('Похожая заявка уже существует. Всё равно сохранить отдельную заявку?'))return;await leadsApi('save_lead',{lead:payload(),allow_duplicate:true})}dlg.close();await refreshLeads(x?'Заявка обновлена':'Заявка добавлена')}catch(e){banner('Не удалось сохранить заявку: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal();
+    form.onsubmit=async ev=>{ev.preventDefault();const button=form.querySelector('.primary');button.disabled=true;try{let data;try{data=await leadsApi('save_lead',{lead:payload()})}catch(e){if(e.message!=='possible_duplicate')throw e;if(!confirm('Похожая заявка уже существует. Всё равно сохранить отдельную заявку?'))return;data=await leadsApi('save_lead',{lead:payload(),allow_duplicate:true})}patchMapped('leads',data.lead,mapLead);if(data.designer)patchMapped('designers',data.designer,mapDesigner);dlg.close();render();banner(x?'Заявка обновлена':'Заявка добавлена','ok')}catch(e){banner('Не удалось сохранить заявку: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal();
   }
 
-  function openLeadInteractionDialog(leadId){const dlg=dynamicDialog('leadInteractionDlg','Добавить контакт',`<div class="grid"><label>Тип<select name="type">${Object.entries(leadInteractionLabels).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label><label>Дата и время<input name="occurred" type="datetime-local" required value="${esc(localDateTime(new Date().toISOString()))}"></label></div><label>Комментарий<textarea name="comment" rows="4" required maxlength="4000"></textarea></label>`),form=dlg.querySelector('form');form.onsubmit=async ev=>{ev.preventDefault();const button=form.querySelector('.primary');button.disabled=true;try{await leadsApi('add_interaction',{interaction:{lead_id:leadId,interaction_type:form.elements.type.value,occurred_at:new Date(form.elements.occurred.value).toISOString(),comment:form.elements.comment.value}});dlg.close();await refreshLeads('Контакт добавлен');openLeadDetails(leadId)}catch(e){banner('Не удалось добавить контакт: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal()}
+  function openLeadInteractionDialog(leadId){const dlg=dynamicDialog('leadInteractionDlg','Добавить контакт',`<div class="grid"><label>Тип<select name="type">${Object.entries(leadInteractionLabels).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label><label>Дата и время<input name="occurred" type="datetime-local" required value="${esc(localDateTime(new Date().toISOString()))}"></label></div><label>Комментарий<textarea name="comment" rows="4" required maxlength="4000"></textarea></label>`),form=dlg.querySelector('form');form.onsubmit=async ev=>{ev.preventDefault();const button=form.querySelector('.primary');button.disabled=true;try{const data=await leadsApi('add_interaction',{interaction:{lead_id:leadId,interaction_type:form.elements.type.value,occurred_at:new Date(form.elements.occurred.value).toISOString(),comment:form.elements.comment.value}});patchMapped('leadInteractions',data.interaction,mapLeadInteraction);patchMapped('leads',data.lead,mapLead);dlg.close();render();banner('Контакт добавлен','ok');openLeadDetails(leadId)}catch(e){banner('Не удалось добавить контакт: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal()}
 
-  function openLeadConversion(leadId){const x=(state.leads||[]).find(v=>v.id===leadId);if(!x||x.status!=='contract'||x.projectId)return;const dlg=dynamicDialog('leadConvertDlg','Создать объект из заявки',`<div class="card conversion-note"><strong>Проверьте данные перед созданием</strong><p class="muted">Заявка останется в CRM и получит постоянную связь с новым объектом.</p></div><label>Название объекта / ЖК<input name="name" required maxlength="160" value="${esc(x.projectName)}"></label><label>Адрес<input name="address" maxlength="300" value="${esc(x.address||'')}"></label><div class="grid"><label>Площадь, м²<input name="area" type="number" min="1" max="10000" step="0.01" value="${x.area??''}"></label><label>Дата начала<input name="start" type="date" value="${esc(x.desiredStartDate||'')}"></label></div><div class="grid"><label>Клиент<input name="client" maxlength="160" value="${esc(x.clientName)}"></label><label>Телефон<input name="phone" maxlength="40" value="${esc(x.phone||'')}"></label></div><label>Статус объекта<select name="status"><option value="preparation">Подготовка</option><option value="in_progress">В работе</option></select></label><label>Примечание<textarea name="comment" rows="3" maxlength="2000">${esc(x.comment||'')}</textarea></label>${x.designerId?`<div class="card"><small class="muted">Дизайнер будет перенесён по ID</small><strong style="display:block;margin-top:5px">${esc(designerName(leadDesigner(x)))}</strong></div>`:''}`),form=dlg.querySelector('form');form.onsubmit=async ev=>{ev.preventDefault();const button=form.querySelector('.primary');button.disabled=true;try{const data=await leadsApi('convert_lead',{lead_id:x.id,project:{name:form.elements.name.value,address:form.elements.address.value,area_sqm:form.elements.area.value||null,start_date:form.elements.start.value||null,client_name:form.elements.client.value,client_phone:form.elements.phone.value,status:form.elements.status.value,comment:form.elements.comment.value}});dlg.close();await loadCloud();banner('Объект создан и связан с заявкой','ok');navigateProject(data.project.id)}catch(e){banner('Не удалось создать объект: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal()}
+  function openLeadConversion(leadId){const x=(state.leads||[]).find(v=>v.id===leadId);if(!x||x.status!=='contract'||x.projectId)return;const dlg=dynamicDialog('leadConvertDlg','Создать объект из заявки',`<div class="card conversion-note"><strong>Проверьте данные перед созданием</strong><p class="muted">Заявка останется в CRM и получит постоянную связь с новым объектом.</p></div><label>Название объекта / ЖК<input name="name" required maxlength="160" value="${esc(x.projectName)}"></label><label>Адрес<input name="address" maxlength="300" value="${esc(x.address||'')}"></label><div class="grid"><label>Площадь, м²<input name="area" type="number" min="1" max="10000" step="0.01" value="${x.area??''}"></label><label>Дата начала<input name="start" type="date" value="${esc(x.desiredStartDate||'')}"></label></div><div class="grid"><label>Клиент<input name="client" maxlength="160" value="${esc(x.clientName)}"></label><label>Телефон<input name="phone" maxlength="40" value="${esc(x.phone||'')}"></label></div><label>Статус объекта<select name="status"><option value="preparation">Подготовка</option><option value="in_progress">В работе</option></select></label><label>Примечание<textarea name="comment" rows="3" maxlength="2000">${esc(x.comment||'')}</textarea></label>${x.designerId?`<div class="card"><small class="muted">Дизайнер будет перенесён по ID</small><strong style="display:block;margin-top:5px">${esc(designerName(leadDesigner(x)))}</strong></div>`:''}`),form=dlg.querySelector('form');form.onsubmit=async ev=>{ev.preventDefault();const button=form.querySelector('.primary');button.disabled=true;try{const data=await leadsApi('convert_lead',{lead_id:x.id,project:{name:form.elements.name.value,address:form.elements.address.value,area_sqm:form.elements.area.value||null,start_date:form.elements.start.value||null,client_name:form.elements.client.value,client_phone:form.elements.phone.value,status:form.elements.status.value,comment:form.elements.comment.value}});patchMapped('projects',data.project,mapProject);patchMapped('leads',data.lead,mapLead);if(data.designer)patchMapped('designers',data.designer,mapDesigner);dlg.close();save();banner('Объект создан и связан с заявкой','ok');navigateProject(data.project.id)}catch(e){banner('Не удалось создать объект: '+e.message,'error')}finally{button.disabled=false}};dlg.showModal()}
 
   function openLeadDetails(leadId){const x=(state.leads||[]).find(v=>v.id===leadId);if(!x)return;const interactions=(state.leadInteractions||[]).filter(v=>v.leadId===x.id).sort((a,b)=>b.occurredAt.localeCompare(a.occurredAt)),linked=proj(x.projectId);let dlg=document.getElementById('leadDetailsDlg');if(!dlg){dlg=document.createElement('dialog');dlg.id='leadDetailsDlg';document.body.appendChild(dlg)}const links=[safeContactLink('phone',x.phone),safeContactLink('telegram',x.telegram),safeContactLink('email',x.email)].filter(Boolean).join('');dlg.innerHTML=`<div class="dialog-body"><div class="sheethead"><button data-close>Закрыть</button><h2>${esc(x.clientName)}</h2><button class="btn secondary" data-edit>Изменить</button></div><div class="lead-profile"><div class="row"><span class="badge ${leadOverdue(x)?'danger':x.status==='contract'?'paid':x.status==='lost'?'neutral':'pending'}">${esc(leadStatusLabels[x.status]||x.status)}</span>${leadOverdue(x)?'<span class="badge danger">Контакт просрочен</span>':''}</div><div class="designer-contact-links">${links||'<span class="muted">Контакты не указаны</span>'}</div><h3>Объект</h3><dl class="object-details"><div><dt>ЖК / название</dt><dd>${esc(x.projectName)}</dd></div><div><dt>Адрес</dt><dd>${esc(x.address||'—')}</dd></div><div><dt>Площадь</dt><dd>${x.area?esc(x.area+' м²'):'—'}</dd></div><div><dt>Бюджет</dt><dd>${x.budget!=null?money(x.budget):'—'}</dd></div><div><dt>Дизайн-проект</dt><dd>${x.hasDesignProject===true?'Есть':x.hasDesignProject===false?'Нет':'Неизвестно'}</dd></div><div><dt>Желаемый старт</dt><dd>${esc(x.desiredStartDate?projectDate(x.desiredStartDate):'—')}</dd></div></dl><h3>Продажи</h3><dl class="object-details"><div><dt>Источник</dt><dd>${esc(leadSourceLabels[x.source]||x.source)}</dd></div><div><dt>Дизайнер</dt><dd>${esc(x.designerId?designerName(leadDesigner(x)):'—')}</dd></div><div><dt>Ответственный</dt><dd>${esc(x.responsibleUserId?leadResponsible(x):'—')}</dd></div><div><dt>Последний контакт</dt><dd>${esc(designerContactDate(x.lastContactAt))}</dd></div><div><dt>Следующий контакт</dt><dd class="${leadOverdue(x)?'danger-text':''}">${esc(designerContactDate(x.nextContactAt))}</dd></div><div><dt>Следующее действие</dt><dd>${esc(x.nextAction||'—')}</dd></div></dl>${x.status==='lost'?`<div class="card loss-result"><small>Причина проигрыша</small><strong>${esc(leadLossLabels[x.lossReason]||x.lossReason)}</strong>${x.lossComment?`<p>${esc(x.lossComment)}</p>`:''}</div>`:''}${linked?`<button class="card linked-project" data-open-linked><span><small>Связанный объект</small><strong>${esc(linked.name)}</strong></span><b>Открыть →</b></button>`:x.status==='contract'?'<button class="btn primary full-button" data-convert>Создать объект</button>':''}${x.comment?`<div class="master-notes">${esc(x.comment)}</div>`:''}</div><div class="section compact"><h3>История контактов</h3><button class="btn primary" data-add-contact>+ Контакт</button></div><div class="designer-history">${interactions.length?interactions.map(v=>`<div class="card"><span class="designer-history-icon">${v.type==='call'?'☎':v.type==='message'?'✉':'•'}</span><span class="grow"><strong>${esc(leadInteractionLabels[v.type]||v.type)}</strong><small>${esc(designerContactDate(v.occurredAt))} · ${esc(v.authorName)}</small><p>${esc(v.comment)}</p></span></div>`).join(''):'<div class="empty">История пока пуста</div>'}</div></div>`;dlg.querySelector('[data-close]').onclick=()=>dlg.close();dlg.querySelector('[data-edit]').onclick=()=>{dlg.close();openLeadDialog(x.id)};dlg.querySelector('[data-add-contact]').onclick=()=>{dlg.close();openLeadInteractionDialog(x.id)};dlg.querySelector('[data-convert]')?.addEventListener('click',()=>{dlg.close();openLeadConversion(x.id)});dlg.querySelector('[data-open-linked]')?.addEventListener('click',()=>{dlg.close();navigateProject(x.projectId)});dlg.showModal()}
 
@@ -1731,6 +1806,15 @@
   }
 
   function renderFallbackCloud() {
+    const moduleByTab={finance:'finance',masters:'masters',designers:'designers',leads:'leads',knowledge:'knowledge'};
+    const moduleName=moduleByTab[state.tab];
+    if(moduleName&&moduleState[moduleName].status!=='loaded'){
+      const entry=moduleState[moduleName];
+      $('#app').innerHTML=`${pageHeader('ADMA',globalTabLabels[state.tab]||'Раздел','Загрузка данных')}<div class="card empty">${entry.status==='error'?'Не удалось загрузить раздел. Повторите попытку.':'Загружаем данные…'}${entry.status==='error'?`<br><button class="btn secondary" id="retryModule">Повторить</button>`:''}</div>`;
+      const retry=document.getElementById('retryModule');if(retry)retry.onclick=()=>ensureModule(moduleName,true).catch(()=>{});
+      if(entry.status==='idle')ensureModule(moduleName).catch(()=>{});
+      return;
+    }
     if (state.tab === 'finance') return renderGlobalFinanceCloud();
     if (state.tab === 'masters') return renderMastersCloud();
     if (state.tab === 'designers') return renderDesignersCloud();
@@ -1847,7 +1931,6 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       state.stages = (cloud.stages || []).map(mapStage);
-      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud(),loadLeadsCloud(),loadKnowledgeCloud()]);
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();
@@ -1857,6 +1940,11 @@
       applyHashRoute();
       render();
       banner('Облако подключено · ' + roleLabel(currentUser.role), 'ok');
+      const background=['finance','masters','operations','designers','leads','knowledge'];
+      Promise.allSettled(background.map(name=>ensureModule(name))).then(results=>{
+        dashboardLoadErrors=results.flatMap((result,index)=>result.status==='rejected'?[globalTabLabels[background[index]]||background[index]]:[]);
+        if(dashboardLoadErrors.length)banner(`Не загрузились: ${dashboardLoadErrors.join(', ')}. Остальные данные доступны.`,'error');
+      });
     } catch (e) {
       if (!initData) {
         if (['invalid_session','session_required','not_approved','not_registered'].includes(e.message)) AdmaAuth.forget();

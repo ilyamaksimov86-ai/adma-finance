@@ -157,8 +157,9 @@
     list.querySelectorAll('[data-side-project]').forEach(button => button.onclick = () => navigateProject(button.dataset.sideProject));
   }
 
-  function openProjectCreateCloud() {
+  async function openProjectCreateCloud() {
     if (!canManageProjects()) return;
+    if(moduleState.designers.status!=='loaded')try{await ensureModule('designers')}catch{}
     editingProjectId = null;
     projectForm.reset();
     pDesigner.innerHTML='<option value="">Не назначен</option>'+(state.designers||[]).filter(d=>!d.isArchived).map(d=>`<option value="${esc(d.id)}">${esc(designerName(d))}${d.studio?' · '+esc(d.studio):''}</option>`).join('');
@@ -168,8 +169,9 @@
     projectDlg.showModal();
   }
 
-  function openProjectEditCloud(id) {
+  async function openProjectEditCloud(id) {
     if (!canManageProjects()) return;
+    if(moduleState.designers.status!=='loaded')try{await ensureModule('designers')}catch{}
     const p = state.projects.find(x => x.id === id);
     if (!p) return;
     editingProjectId = id;
@@ -201,11 +203,12 @@
     if (archived && !confirm(`Перенести «${p.name}» в архив? Расходы и чеки сохранятся.`)) return;
     try {
       banner(archived ? 'Переношу объект в архив…' : 'Возвращаю объект в работу…');
-      await api('update_project', { project: { id, status: archived ? 'archived' : 'in_progress' } });
+      const data=await api('update_project', { project: { id, status: archived ? 'archived' : 'in_progress' } });
+      patchMapped('projects',data.project,mapProject);
       if (state.project === id) state.project = null;
       state.tab = 'projects';
       showArchivedProjects = archived;
-      await loadCloud();
+      save();render();
       banner(archived ? 'Объект перенесён в архив' : 'Объект снова активен', 'ok');
     } catch (e) {
       banner('Не удалось изменить статус объекта: ' + e.message, 'error');
@@ -318,8 +321,12 @@
     try {
       banner('Удаляю этап…');
       await api('delete_stage', { id });
+      removeFromState('stages',id);
+      for(const item of state.projectTasks||[])if(item.stageId===id)item.stageId='';
+      for(const item of state.projectPhotos||[])if(item.stageId===id)item.stageId='';
+      for(const item of state.masterAssignments||[])if(item.stageId===id)item.stageId='';
       stageDlg.close();
-      await loadCloud();
+      save();render();
       banner('Этап удалён', 'ok');
     } catch (e) { banner('Не удалось удалить этап: ' + e.message, 'error'); }
   }
@@ -341,7 +348,14 @@
     if (archive) archive.onclick = () => setProjectArchivedCloud(p.id, !isArchived);
     const operation = document.getElementById('objectOperation');
     if (operation) operation.onclick = () => openExpense(p.id);
-    if (projectSection === 'overview') renderProjectOverview(p);
+    const requiredModule=projectSection==='finance'?'finance':projectSection==='team'?'masters':['documents','tasks','photos'].includes(projectSection)?'operations':null;
+    if(requiredModule&&moduleState[requiredModule].status!=='loaded'){
+      const entry=moduleState[requiredModule];
+      $('#projectSection').innerHTML=`<div class="card empty">${entry.status==='error'?'Не удалось загрузить раздел.':'Загружаем данные раздела…'}${entry.status==='error'?'<br><button class="btn secondary" id="retryProjectModule">Повторить</button>':''}</div>`;
+      const retry=document.getElementById('retryProjectModule');if(retry)retry.onclick=()=>ensureModule(requiredModule,true).catch(()=>{});
+      if(entry.status==='idle')ensureModule(requiredModule).catch(()=>{});
+    }
+    else if (projectSection === 'overview') renderProjectOverview(p);
     else if (projectSection === 'schedule') renderProjectSchedule(p);
     else if (projectSection === 'finance') renderProjectFinance(p);
     else if (projectSection === 'team') renderProjectTeam(p);
@@ -450,12 +464,12 @@
           designer_id: optionalValue(pDesigner.value),
         };
         banner(editingProjectId ? 'Сохраняю изменения объекта…' : 'Сохраняю объект…');
-        if (editingProjectId) await api('update_project', { project: { id: editingProjectId, ...project } });
-        else await api('create_project', { project });
+        const data=editingProjectId?await api('update_project', { project: { id: editingProjectId, ...project } }):await api('create_project', { project });
+        patchMapped('projects',data.project,mapProject);
         const wasEditing = !!editingProjectId;
         editingProjectId = null;
         projectDlg.close();
-        await loadCloud();
+        save();render();
         banner(wasEditing ? 'Объект обновлён' : 'Объект сохранён в облаке', 'ok');
       } catch (e) { console.error(e); banner('Не удалось сохранить объект: ' + e.message, 'error'); }
     };
@@ -481,10 +495,10 @@
       controls.forEach(control => control.disabled = true);
       try {
         banner(existing ? 'Сохраняю этап…' : 'Добавляю этап…');
-        if (existing) await api('update_stage', { stage: { id: existing.id, ...stage } });
-        else await api('create_stage', { stage });
+        const data=existing?await api('update_stage', { stage: { id: existing.id, ...stage } }):await api('create_stage', { stage });
+        patchMapped('stages',data.stage,mapStage);
         stageDlg.close();
-        await loadCloud();
+        save();render();
         banner(existing ? 'Этап обновлён' : 'Этап добавлен', 'ok');
       } catch (e) { banner('Не удалось сохранить этап: ' + e.message, 'error'); }
       finally { controls.forEach(control => control.disabled = false); }

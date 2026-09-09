@@ -60,8 +60,7 @@ Deno.serve(async req => {
     const table=kind==='document'?'project_documents':'project_photos';
     const {data,error}=await db.from(table).insert(row).select('*').single();
     if(error){await removeStorageObject(db,'project-files',path);throw error;}
-    const {data:signed}=await db.storage.from('project-files').createSignedUrl(path,3600);
-    return json({ok:true,[kind]:{...data,file_url:signed?.signedUrl||null}});
+    return json({ok:true,[kind]:data});
   } catch(error) {
     const message=error instanceof Error?error.message:'unknown_error';
     const bad=['required_field','field_too_long','invalid_date'];

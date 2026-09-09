@@ -68,8 +68,14 @@ Deno.serve(async req=>{
       const ids=await allowedProjectIds();let pq=db.from("projects").select("*").order("created_at",{ascending:true});if(ids)pq=ids.length?pq.in("id",ids):pq.eq("id","00000000-0000-0000-0000-000000000000");const {data:projects,error:pe}=await pq;if(pe)throw pe;
       let eq=db.from("expenses").select("*,author:app_users!expenses_created_by_fkey(first_name,last_name,telegram_username,web_login)").order("expense_date",{ascending:false});if(ids)eq=ids.length?eq.in("project_id",ids):eq.eq("project_id","00000000-0000-0000-0000-000000000000");const {data:expenses,error:ee}=await eq;if(ee)throw ee;
       let sq=db.from("project_stages").select("*").order("position",{ascending:true}).order("created_at",{ascending:true});if(ids)sq=ids.length?sq.in("project_id",ids):sq.eq("project_id","00000000-0000-0000-0000-000000000000");const {data:stages,error:se}=await sq;if(se)throw se;
-      await Promise.all((expenses||[]).map(async(e:any)=>{if(e.receipt_path){const {data}=await db.storage.from("receipts").createSignedUrl(e.receipt_path,3600);e.receipt_url=data?.signedUrl||null}else e.receipt_url=null}));
       return json({ok:true,role:user.role,current_user:user,projects,expenses,stages});
+    }
+
+    if(action==="get_receipt_url"){
+      const expenseId=String(body.id||"");if(!expenseId)return json({error:"id_required"},400);
+      const {data:expense,error}=await db.from("expenses").select("project_id,receipt_path").eq("id",expenseId).single();if(error)throw error;
+      if(!(await canAccessProject(expense.project_id)))return json({error:"forbidden"},403);if(!expense.receipt_path)return json({error:"receipt_missing"},404);
+      const signed=await db.storage.from("receipts").createSignedUrl(expense.receipt_path,3600);if(signed.error)throw signed.error;return json({ok:true,url:signed.data?.signedUrl||null,expires_in:3600});
     }
 
     if(action==="list_users"){
