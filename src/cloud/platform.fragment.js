@@ -4,8 +4,8 @@
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
-    const modules=[['Финансы',loadFinanceCloud],['Команда',loadMastersCloud],['Задачи и файлы',loadProjectOperationsCloud],['Дизайнеры',loadDesignersCloud],['Заявки',loadLeadsCloud],['База знаний',loadKnowledgeCloud]];
-    const results=await Promise.allSettled(modules.map(([,load])=>load()));
+    const modules=[['Финансы','finance'],['Команда','masters'],['Задачи и файлы','operations'],['Дизайнеры','designers'],['Заявки','leads'],['База знаний','knowledge']];
+    const results=await Promise.allSettled(modules.map(([,name])=>ensureModule(name,true)));
     dashboardLoadErrors=results.flatMap((result,index)=>result.status==='rejected'?[modules[index][0]]:[]);
     save();
     render();
@@ -28,6 +28,15 @@
 
 /* @fragment 1488 */
   function renderFallbackCloud() {
+    const moduleByTab={finance:'finance',masters:'masters',designers:'designers',leads:'leads',knowledge:'knowledge'};
+    const moduleName=moduleByTab[state.tab];
+    if(moduleName&&moduleState[moduleName].status!=='loaded'){
+      const entry=moduleState[moduleName];
+      $('#app').innerHTML=`${pageHeader('ADMA',globalTabLabels[state.tab]||'Раздел','Загрузка данных')}<div class="card empty">${entry.status==='error'?'Не удалось загрузить раздел. Повторите попытку.':'Загружаем данные…'}${entry.status==='error'?`<br><button class="btn secondary" id="retryModule">Повторить</button>`:''}</div>`;
+      const retry=document.getElementById('retryModule');if(retry)retry.onclick=()=>ensureModule(moduleName,true).catch(()=>{});
+      if(entry.status==='idle')ensureModule(moduleName).catch(()=>{});
+      return;
+    }
     if (state.tab === 'finance') return renderGlobalFinanceCloud();
     if (state.tab === 'masters') return renderMastersCloud();
     if (state.tab === 'designers') return renderDesignersCloud();
@@ -144,7 +153,6 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       state.stages = (cloud.stages || []).map(mapStage);
-      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud(),loadLeadsCloud(),loadKnowledgeCloud()]);
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();
@@ -154,6 +162,11 @@
       applyHashRoute();
       render();
       banner('Облако подключено · ' + roleLabel(currentUser.role), 'ok');
+      const background=['finance','masters','operations','designers','leads','knowledge'];
+      Promise.allSettled(background.map(name=>ensureModule(name))).then(results=>{
+        dashboardLoadErrors=results.flatMap((result,index)=>result.status==='rejected'?[globalTabLabels[background[index]]||background[index]]:[]);
+        if(dashboardLoadErrors.length)banner(`Не загрузились: ${dashboardLoadErrors.join(', ')}. Остальные данные доступны.`,'error');
+      });
     } catch (e) {
       if (!initData) {
         if (['invalid_session','session_required','not_approved','not_registered'].includes(e.message)) AdmaAuth.forget();

@@ -237,7 +237,9 @@
   const waybillStatusLabels={created:'Создана',sent:'Отправлена',partially_paid:'Частично оплачена',paid:'Оплачена',closed:'Закрыта'};
   const companyCategoryLabels={advertising:'Реклама',services:'Сервисы / подписки',office:'Офис',transport:'Транспорт',administrative:'Административные',salaries:'Зарплаты',taxes:'Налоги',banking:'Банковские расходы',other:'Прочее'};
   const statusBadge = status => ['paid','closed'].includes(status)?'paid':['partially_paid','issued','sent'].includes(status)?'pending':'neutral';
-  const fileLink = item => item.fileUrl ? `<a class="btn secondary" href="${esc(item.fileUrl)}" target="_blank" rel="noopener">Открыть файл</a>` : '';
+  const financeFileKind=item=>item?.supplier?'waybill':item?.description&&item?.expense_date?'company_expense':'act';
+  const fileLink = item => item?.filePath ? `<button type="button" class="btn secondary" data-finance-file="${financeFileKind(item)}:${esc(item.id)}">Открыть файл</button>` : '';
+  async function openFinanceFile(kind,id){const lists={act:state.acts,waybill:state.waybills,company_expense:state.companyExpenses},item=(lists[kind]||[]).find(x=>x.id===id);if(!item)return;try{if(!item.fileUrl||item.fileUrlExpiresAt<=Date.now()){const data=await financeApi('get_file_url',{kind,id});item.fileUrl=data.url||'';item.fileUrlExpiresAt=Date.now()+Math.max(0,Number(data.expires_in||3600)-60)*1000}if(!item.fileUrl)throw new Error('file_unavailable');if(tgApp?.openLink)tgApp.openLink(item.fileUrl);else window.open(item.fileUrl,'_blank','noopener')}catch(e){banner('Не удалось открыть файл: '+e.message,'error')}}
   const financeEmpty = text => `<div class="card empty">${esc(text)}</div>`;
 
   async function uploadFinanceFile(file,entity){
@@ -245,18 +247,18 @@
     return new Promise((resolve,reject)=>{const form=new FormData();for(const [key,value] of Object.entries(credentials))form.append(key,value);form.append('entity',entity);form.append('file',file,file.name);const xhr=new XMLHttpRequest();xhr.open('POST',SUPABASE_FUNCTIONS+'/finance-file-upload',true);xhr.timeout=45000;xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch{};if(xhr.status>=200&&xhr.status<300&&data.path)return resolve(data.path);reject(new Error(data.error||`HTTP_${xhr.status}`))};xhr.onerror=()=>reject(new Error('Ошибка загрузки файла'));xhr.ontimeout=()=>reject(new Error('Загрузка файла заняла слишком много времени'));xhr.send(form)});
   }
   function dynamicDialog(id,title,body){let dlg=document.getElementById(id);if(!dlg){dlg=document.createElement('dialog');dlg.id=id;document.body.appendChild(dlg)}dlg.innerHTML=`<form class="finance-form"><div class="sheethead"><button type="button" data-close>Отмена</button><h2>${esc(title)}</h2><button class="btn primary">Сохранить</button></div>${body}</form>`;dlg.querySelector('[data-close]').onclick=()=>dlg.close();return dlg}
-  async function refreshFinance(message){await loadFinanceCloud();render();banner(message,'ok')}
+  async function refreshFinance(message){await ensureModule('finance',true);banner(message,'ok')}
 
   function openActDialog(projectId,actId=''){
     const act=(state.acts||[]).find(x=>x.id===actId);const stages=stagesFor(projectId);
     const dlg=dynamicDialog('actDlg',act?'Редактировать акт':'Новый акт',`<div class="grid"><label>Номер<input name="number" required maxlength="100" value="${esc(act?.number||'')}"></label><label>Дата<input name="date" type="date" required value="${esc(act?.date||new Date().toISOString().slice(0,10))}"></label></div><label>Название / описание<input name="title" required maxlength="300" value="${esc(act?.title||'')}"></label><div class="grid"><label>Этап<select name="stage"><option value="">Без этапа</option>${stages.map(s=>`<option value="${esc(s.id)}" ${act?.stageId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Сумма акта, ₽<input name="amount" type="number" min="0" step="0.01" required value="${act?.amount??''}"></label></div><label>Статус<select name="status">${Object.entries(actStatusLabels).map(([value,label])=>`<option value="${value}" ${act?.status===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(act||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(act?.comment||'')}</textarea></label>${act?'<button type="button" class="btn danger full-button" data-delete>Удалить акт</button>':''}`);
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=act?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'act');await financeApi('save_act',{act:{id:act?.id,project_id:projectId,stage_id:form.elements.stage.value||null,number:form.elements.number.value,act_date:form.elements.date.value,title:form.elements.title.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});dlg.close();await refreshFinance(act?'Акт обновлён':'Акт добавлен')}catch(e){banner('Не удалось сохранить акт: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить акт №${act.number}?`))return;try{await financeApi('delete_act',{id:act.id});dlg.close();await refreshFinance('Акт удалён')}catch(e){banner('Не удалось удалить акт: '+e.message,'error')}};dlg.showModal();
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=act?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'act');const data=await financeApi('save_act',{act:{id:act?.id,project_id:projectId,stage_id:form.elements.stage.value||null,number:form.elements.number.value,act_date:form.elements.date.value,title:form.elements.title.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});patchMapped('acts',data.act,mapAct);dlg.close();render();banner(act?'Акт обновлён':'Акт добавлен','ok')}catch(e){banner('Не удалось сохранить акт: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить акт №${act.number}?`))return;try{await financeApi('delete_act',{id:act.id});removeFromState('acts',act.id);state.actCosts=(state.actCosts||[]).filter(x=>x.actId!==act.id);state.actPayments=(state.actPayments||[]).filter(x=>x.actId!==act.id);dlg.close();render();banner('Акт удалён','ok')}catch(e){banner('Не удалось удалить акт: '+e.message,'error')}};dlg.showModal();
   }
   function openWaybillDialog(projectId,waybillId=''){
     const item=(state.waybills||[]).find(x=>x.id===waybillId);const dlg=dynamicDialog('waybillDlg',item?'Редактировать накладную':'Новая накладная',`<div class="grid"><label>Номер<input name="number" required maxlength="100" value="${esc(item?.number||'')}"></label><label>Дата<input name="date" type="date" required value="${esc(item?.date||new Date().toISOString().slice(0,10))}"></label></div><label>Поставщик<input name="supplier" required maxlength="200" value="${esc(item?.supplier||'')}"></label><label>Описание<textarea name="description" rows="2" maxlength="2000">${esc(item?.description||'')}</textarea></label><div class="grid"><label>Сумма накладной, ₽<input name="amount" type="number" min="0" step="0.01" required value="${item?.amount??''}"></label><label>Статус<select name="status">${Object.entries(waybillStatusLabels).map(([value,label])=>`<option value="${value}" ${item?.status===value?'selected':''}>${label}</option>`).join('')}</select></label></div><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(item||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(item?.comment||'')}</textarea></label>${item?'<button type="button" class="btn danger full-button" data-delete>Удалить накладную</button>':''}`);
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'waybill');await financeApi('save_waybill',{waybill:{id:item?.id,project_id:projectId,number:form.elements.number.value,waybill_date:form.elements.date.value,supplier:form.elements.supplier.value,description:form.elements.description.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});dlg.close();await refreshFinance(item?'Накладная обновлена':'Накладная добавлена')}catch(e){banner('Не удалось сохранить накладную: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить накладную №${item.number}?`))return;try{await financeApi('delete_waybill',{id:item.id});dlg.close();await refreshFinance('Накладная удалена')}catch(e){banner('Не удалось удалить накладную: '+e.message,'error')}};dlg.showModal();
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'waybill');const data=await financeApi('save_waybill',{waybill:{id:item?.id,project_id:projectId,number:form.elements.number.value,waybill_date:form.elements.date.value,supplier:form.elements.supplier.value,description:form.elements.description.value,amount:Number(form.elements.amount.value),status:form.elements.status.value,file_path:filePath,comment:form.elements.comment.value}});patchMapped('waybills',data.waybill,mapWaybill);dlg.close();render();banner(item?'Накладная обновлена':'Накладная добавлена','ok')}catch(e){banner('Не удалось сохранить накладную: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm(`Удалить накладную №${item.number}?`))return;try{await financeApi('delete_waybill',{id:item.id});removeFromState('waybills',item.id);state.waybillPayments=(state.waybillPayments||[]).filter(x=>x.waybillId!==item.id);dlg.close();render();banner('Накладная удалена','ok')}catch(e){banner('Не удалось удалить накладную: '+e.message,'error')}};dlg.showModal();
   }
   function openFinanceLineDialog(kind,parentId){
     const definitions={act_cost:['Выплата / расход по акту','add_act_cost','act_id'],act_payment:['Оплата заказчика','add_act_payment','act_id'],waybill_payment:['Оплата поставщику','add_waybill_payment','waybill_id']};const [title,action,key]=definitions[kind];
@@ -314,8 +316,8 @@
 /* @fragment 1387 */
   function openCompanyExpenseDialog(expenseId=''){
     const item=(state.companyExpenses||[]).find(x=>x.id===expenseId);const dlg=dynamicDialog('companyExpenseDlg',item?'Редактировать общий расход':'Новый общий расход',`<div class="grid"><label>Дата<input name="date" type="date" required value="${esc(item?.date||new Date().toISOString().slice(0,10))}"></label><label>Сумма, ₽<input name="amount" type="number" min="0.01" step="0.01" required value="${item?.amount??''}"></label></div><label>Категория<select name="category">${Object.entries(companyCategoryLabels).map(([value,label])=>`<option value="${value}" ${item?.category===value?'selected':''}>${label}</option>`).join('')}</select></label><label>Описание<input name="description" required maxlength="1000" value="${esc(item?.description||'')}"></label><label>Файл PDF / фото<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp"></label>${fileLink(item||{})}<label>Комментарий<textarea name="comment" rows="3" maxlength="4000">${esc(item?.comment||'')}</textarea></label>${item?'<button type="button" class="btn danger full-button" data-delete>Удалить общий расход</button>':''}`);
-    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'company-expense');await financeApi('save_company_expense',{expense:{id:item?.id,expense_date:form.elements.date.value,amount:Number(form.elements.amount.value),category:form.elements.category.value,description:form.elements.description.value,comment:form.elements.comment.value,file_path:filePath}});dlg.close();await refreshFinance(item?'Общий расход обновлён':'Общий расход добавлен')}catch(e){banner('Не удалось сохранить расход: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
-    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm('Удалить общий расход?'))return;try{await financeApi('delete_company_expense',{id:item.id});dlg.close();await refreshFinance('Общий расход удалён')}catch(e){banner('Не удалось удалить расход: '+e.message,'error')}};dlg.showModal();
+    dlg.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const form=ev.currentTarget,controls=[...form.querySelectorAll('input,select,textarea,button')];controls.forEach(x=>x.disabled=true);try{let filePath=item?.filePath||null;const file=form.elements.file.files?.[0];if(file)filePath=await uploadFinanceFile(file,'company-expense');const data=await financeApi('save_company_expense',{expense:{id:item?.id,expense_date:form.elements.date.value,amount:Number(form.elements.amount.value),category:form.elements.category.value,description:form.elements.description.value,comment:form.elements.comment.value,file_path:filePath}});patchMapped('companyExpenses',data.expense,mapCompanyExpense);dlg.close();render();banner(item?'Общий расход обновлён':'Общий расход добавлен','ok')}catch(e){banner('Не удалось сохранить расход: '+e.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const del=dlg.querySelector('[data-delete]');if(del)del.onclick=async()=>{if(!confirm('Удалить общий расход?'))return;try{await financeApi('delete_company_expense',{id:item.id});removeFromState('companyExpenses',item.id);dlg.close();render();banner('Общий расход удалён','ok')}catch(e){banner('Не удалось удалить расход: '+e.message,'error')}};dlg.showModal();
   }
   function renderCompanyExpenses(content){
     const items=[...(state.companyExpenses||[])].sort((a,b)=>b.date.localeCompare(a.date));content.innerHTML=`<div class="section"><div><h2>Общие расходы ADMA</h2><p class="muted">Не связаны с объектами и уменьшают только прибыль компании</p></div><button id="addCompanyExpense" class="btn primary">+ Расход</button></div><div class="card finance-filters"><label>С даты<input id="generalFrom" type="date"></label><label>По дату<input id="generalTo" type="date"></label><label>Категория<select id="generalCategory"><option value="">Все категории</option>${Object.entries(companyCategoryLabels).map(([value,label])=>`<option value="${value}">${label}</option>`).join('')}</select></label><strong id="generalTotal"></strong></div><div id="generalList" class="finance-list"></div>`;
@@ -340,6 +342,7 @@
   }
 
   function installFinanceHandlers() {
+    if(!document.body.dataset.financeFileHandler){document.body.dataset.financeFileHandler='1';document.addEventListener('click',event=>{const button=event.target.closest?.('[data-finance-file]');if(!button)return;event.preventDefault();const [kind,id]=button.dataset.financeFile.split(':');openFinanceFile(kind,id)})}
     const originalOpenExpense = openExpense;
     openExpense = function(pid) {
       if (savingExpense) return;
@@ -395,14 +398,14 @@
         let payload = expensePayload();
         payload = await attachNewReceipt(payload);
         banner(editingExpenseId ? 'Сохраняю изменения…' : 'Сохраняю расход…');
-        if (expenseId) await api('update_expense', { expense: payload });
-        else await api('create_expense', { expense: payload });
+        const previous=expenseId?state.expenses.find(x=>x.id===expenseId):null;
+        const data=expenseId?await api('update_expense', { expense: payload }):await api('create_expense', { expense: payload });
+        const mapped=patchMapped('expenses',data.expense,mapExpense);if(previous?.author&&!data.expense.author)mapped.author=previous.author;
         editingExpenseId = null;
         state.receipt = null;
         clearSelectedReceipt();
         expenseDlg.close();
-        try { await loadCloud(); }
-        catch { banner('Расход сохранён, но список не обновился. Перезапустите приложение.', 'error'); return; }
+        save();render();
         banner(payload.receipt_path ? 'Сохранено в облаке вместе с чеком' : 'Сохранено в облаке', 'ok');
       } catch (e) { console.error(e); banner('Не удалось сохранить расход: ' + e.message, 'error'); }
       finally {
@@ -414,6 +417,7 @@
 
     const originalDetails = details;
     details = function(i) {
+      const cached=state.expenses.find(x=>x.id===i);if(cached?.receipt&&cached.receiptExpiresAt<=Date.now())cached.receipt=null;
       originalDetails(i);
       const ex = state.expenses.find(x => x.id === i);
       if (!ex) return;
@@ -422,6 +426,7 @@
       const delBtn = document.getElementById('del');
       const infoCard = document.querySelector('#detail .card');
       if (infoCard && ex.author) infoCard.insertAdjacentHTML('beforeend', `<p><small class="muted">Автор</small><br>${esc(ex.author)}</p>`);
+      if(ex.receiptPath&&!ex.receipt){const receiptButton=document.createElement('button');receiptButton.className='btn secondary full-button';receiptButton.textContent='Открыть чек';receiptButton.onclick=async()=>{receiptButton.disabled=true;try{const data=await api('get_receipt_url',{id:ex.id});ex.receipt=data.url||null;ex.receiptExpiresAt=Date.now()+Math.max(0,Number(data.expires_in||3600)-60)*1000;if(!ex.receipt)throw new Error('receipt_unavailable');const img=document.createElement('img');img.className='receipt';img.src=ex.receipt;receiptButton.replaceWith(img)}catch(e){receiptButton.disabled=false;banner('Не удалось открыть чек: '+e.message,'error')}};infoCard.insertAdjacentElement('afterend',receiptButton)}
       const actions = delBtn?.parentElement || editBtn?.parentElement;
       if (actions && delBtn) {
         const topRow = document.createElement('div');
@@ -448,9 +453,9 @@
       if (paid) paid.onclick = async () => {
         try {
           banner('Отмечаю компенсацию…');
-          await api('mark_reimbursed', { id: i });
+          const data=await api('mark_reimbursed', { id: i });patchMapped('expenses',data.expense,mapExpense);
           detailDlg.close();
-          await loadCloud();
+          save();render();
           banner('Компенсация отмечена', 'ok');
         } catch (e) { banner('Ошибка: ' + e.message, 'error'); }
       };
@@ -458,9 +463,9 @@
         if (!confirm('Удалить расход?')) return;
         try {
           banner('Удаляю расход…');
-          await api('delete_expense', { id: i });
+          await api('delete_expense', { id: i });removeFromState('expenses',i);
           detailDlg.close();
-          await loadCloud();
+          save();render();
           banner('Расход и его чек удалены', 'ok');
         } catch (e) { banner('Ошибка: ' + e.message, 'error'); }
       };

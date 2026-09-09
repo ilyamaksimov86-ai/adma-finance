@@ -32,9 +32,21 @@
   }
 
   async function refreshOperations(message) {
-    await loadProjectOperationsCloud();
-    render();
+    await ensureModule('operations',true);
     if (message) banner(message, 'ok');
+  }
+
+  async function getProjectFileUrl(kind,item){
+    if(item.fileUrl&&item.fileUrlExpiresAt>Date.now())return item.fileUrl;
+    const data=await operationsApi('get_file_url',{kind,id:item.id});
+    item.fileUrl=data.url||'';
+    item.fileUrlExpiresAt=Date.now()+Math.max(0,Number(data.expires_in||3600)-60)*1000;
+    return item.fileUrl;
+  }
+
+  async function openPrivateProjectFile(kind,item){
+    try{const url=await getProjectFileUrl(kind,item);if(!url)throw new Error('file_unavailable');if(tgApp?.openLink)tgApp.openLink(url);else window.open(url,'_blank','noopener')}
+    catch(error){banner('Не удалось открыть файл: '+error.message,'error')}
   }
 
   const bytesLabel = value => value == null ? '' : value < 1024 * 1024
@@ -50,7 +62,7 @@
         <label>Дата документа<input name="documentDate" type="date" value="${esc(item?.documentDate || '')}"></label>
       </div>
       ${item
-        ? (item.fileUrl ? `<a class="btn secondary" href="${esc(item.fileUrl)}" target="_blank" rel="noopener">Открыть файл</a>` : '<div class="empty">Файл временно недоступен</div>')
+        ? '<button type="button" class="btn secondary" data-open-file>Открыть файл</button>'
         : '<label>Файл<input name="file" type="file" required accept="application/pdf,.doc,.docx,.xls,.xlsx,image/jpeg,image/png,image/webp"></label>'}
       <label>Комментарий / описание<textarea name="description" rows="4" maxlength="4000">${esc(item?.description || '')}</textarea></label>
       ${item ? '<button type="button" class="btn danger full-button" data-delete>Удалить документ</button>' : ''}`);
@@ -61,24 +73,24 @@
       controls.forEach(control => { control.disabled = true; });
       try {
         if (item) {
-          await operationsApi('save_document', { document: {
+          const data=await operationsApi('save_document', { document: {
             id: item.id,
             title: form.elements.title.value,
             category: form.elements.category.value,
             document_date: form.elements.documentDate.value || null,
             description: form.elements.description.value,
-          }});
+          }});patchMapped('projectDocuments',data.document,mapProjectDocument);
         } else {
-          await uploadProjectFile(form.elements.file.files[0], {
+          const data=await uploadProjectFile(form.elements.file.files[0], {
             kind: 'document', project_id: projectId,
             title: form.elements.title.value,
             category: form.elements.category.value,
             document_date: form.elements.documentDate.value,
             description: form.elements.description.value,
-          });
+          });patchMapped('projectDocuments',data.document,mapProjectDocument);
         }
         dlg.close();
-        await refreshOperations(item ? 'Документ обновлён' : 'Документ загружен');
+        render();banner(item ? 'Документ обновлён' : 'Документ загружен','ok');
       } catch (error) {
         banner('Не удалось сохранить документ: ' + error.message, 'error');
       } finally {
@@ -89,11 +101,12 @@
     if (remove) remove.onclick = async () => {
       if (!confirm(`Удалить документ «${item.title}» и его файл?`)) return;
       try {
-        await operationsApi('delete_document', { id: item.id });
+        await operationsApi('delete_document', { id: item.id });removeFromState('projectDocuments',item.id);
         dlg.close();
-        await refreshOperations('Документ удалён');
+        render();banner('Документ удалён','ok');
       } catch (error) { banner('Не удалось удалить документ: ' + error.message, 'error'); }
     };
+    const open=dlg.querySelector('[data-open-file]');if(open)open.onclick=()=>openPrivateProjectFile('document',item);
     dlg.showModal();
   }
 
@@ -105,7 +118,7 @@
       <div class="page-title-row"><div><h2>Документы</h2><p>Файлы этого объекта в защищённом хранилище</p></div>${project.status !== 'archived' ? '<button id="addProjectDocument" class="btn primary">+ Документ</button>' : ''}</div>
       <section class="card operation-filter"><label>Категория<select id="documentCategoryFilter"><option value="">Все категории</option>${Object.entries(documentCategoryLabels).map(([value, label]) => `<option value="${value}" ${documentCategoryFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><span>${items.length} файлов</span></section>
       <div class="finance-links card"><div><strong>Финансовые документы</strong><small>Акты и Накладные хранятся в Финансах без дублирования</small></div><button class="btn secondary" data-finance-link="acts">Акты →</button><button class="btn secondary" data-finance-link="waybills">Накладные →</button></div>
-      <div class="document-list">${items.length ? items.map(item => `<button class="card document-card" data-document-id="${esc(item.id)}"><span class="file-icon">${item.mime_type?.startsWith('image/') ? 'IMG' : 'DOC'}</span><span class="grow"><strong>${esc(item.title)}</strong><small>${esc(documentCategoryLabels[item.category] || item.category)} · ${esc(item.original_name || 'Файл')}</small><small>${esc(projectDate((item.documentDate || item.createdAt).slice(0, 10)))} · ${esc(item.authorName)}${item.size_bytes != null ? ' · ' + bytesLabel(item.size_bytes) : ''}</small></span><span class="badge ${item.fileUrl ? 'paid' : 'pending'}">${item.fileUrl ? 'Доступен' : 'Недоступен'}</span></button>`).join('') : '<div class="card empty">Документов в этой категории пока нет</div>'}</div>`;
+      <div class="document-list">${items.length ? items.map(item => `<button class="card document-card" data-document-id="${esc(item.id)}"><span class="file-icon">${item.mime_type?.startsWith('image/') ? 'IMG' : 'DOC'}</span><span class="grow"><strong>${esc(item.title)}</strong><small>${esc(documentCategoryLabels[item.category] || item.category)} · ${esc(item.original_name || 'Файл')}</small><small>${esc(projectDate((item.documentDate || item.createdAt).slice(0, 10)))} · ${esc(item.authorName)}${item.size_bytes != null ? ' · ' + bytesLabel(item.size_bytes) : ''}</small></span><span class="badge paid">Приватный</span></button>`).join('') : '<div class="card empty">Документов в этой категории пока нет</div>'}</div>`;
     document.getElementById('addProjectDocument')?.addEventListener('click', () => openDocumentDialog(project.id));
     document.getElementById('documentCategoryFilter').onchange = event => { documentCategoryFilter = event.target.value; renderProjectDocuments(project); };
     document.querySelectorAll('[data-document-id]').forEach(button => button.onclick = () => openDocumentDialog(project.id, button.dataset.documentId));
@@ -164,7 +177,7 @@
       const form = event.currentTarget;
       const [kind, assigneeId] = form.elements.assignee.value.split(':');
       try {
-        await operationsApi('save_task', { task: {
+        const data=await operationsApi('save_task', { task: {
           id: item?.id, project_id: projectId, title: form.elements.title.value,
           description: form.elements.description.value,
           assignee_user_id: kind === 'user' ? assigneeId : null,
@@ -172,18 +185,18 @@
           deadline: form.elements.deadline.value || null, priority: form.elements.priority.value,
           status: form.elements.status.value, stage_id: form.elements.stage.value || null,
           act_id: form.elements.act?.value || null, waybill_id: form.elements.waybill?.value || null,
-        }});
+        }});patchMapped('projectTasks',data.task,mapProjectTask);
         dlg.close();
-        await refreshOperations(item ? 'Задача обновлена' : 'Задача добавлена');
+        render();banner(item ? 'Задача обновлена' : 'Задача добавлена','ok');
       } catch (error) { banner('Не удалось сохранить задачу: ' + error.message, 'error'); }
     };
     const remove = dlg.querySelector('[data-delete]');
     if (remove) remove.onclick = async () => {
       if (!confirm(`Удалить задачу «${item.title}»?`)) return;
       try {
-        await operationsApi('delete_task', { id: item.id });
+        await operationsApi('delete_task', { id: item.id });removeFromState('projectTasks',item.id);
         dlg.close();
-        await refreshOperations('Задача удалена');
+        render();banner('Задача удалена','ok');
       } catch (error) { banner('Не удалось удалить задачу: ' + error.message, 'error'); }
     };
     dlg.showModal();
@@ -208,8 +221,8 @@
     document.querySelectorAll('[data-complete-task]').forEach(button => button.onclick = async () => {
       const item = all.find(value => value.id === button.dataset.completeTask);
       try {
-        await operationsApi('save_task', { task: taskPayload(item, { status: 'completed' }) });
-        await refreshOperations('Задача выполнена');
+        const data=await operationsApi('save_task', { task: taskPayload(item, { status: 'completed' }) });
+        patchMapped('projectTasks',data.task,mapProjectTask);render();banner('Задача выполнена','ok');
       } catch (error) { banner('Не удалось завершить задачу: ' + error.message, 'error'); }
     });
   }
@@ -224,7 +237,7 @@
     const item = (state.projectPhotos || []).find(value => value.id === photoId);
     const stages = stagesFor(projectId);
     const dlg = dynamicDialog('projectPhotoDlg', item ? 'Фото объекта' : 'Добавить фото', `
-      ${item && item.fileUrl ? `<img class="photo-dialog-preview" src="${esc(item.fileUrl)}" alt="${esc(item.caption || 'Фото объекта')}">` : ''}
+      ${item ? '<button type="button" class="btn secondary" data-open-photo>Открыть фото</button>' : ''}
       ${item ? '' : '<label>Фотографии<input name="files" type="file" accept="image/*" multiple required></label>'}
       <label>Этап<select name="stage"><option value="">Без этапа</option>${stages.map(stage => `<option value="${esc(stage.id)}" ${item?.stageId === stage.id ? 'selected' : ''}>${esc(stage.name)}</option>`).join('')}</select></label>
       <label>Дата съёмки<input name="shotDate" type="date" value="${esc(item?.shotDate || '')}"></label>
@@ -237,23 +250,23 @@
       submit.disabled = true;
       try {
         if (item) {
-          await operationsApi('save_photo', { photo: {
+          const data=await operationsApi('save_photo', { photo: {
             id: item.id, stage_id: form.elements.stage.value || null,
             shot_date: form.elements.shotDate.value || null, caption: form.elements.caption.value,
-          }});
+          }});patchMapped('projectPhotos',data.photo,mapProjectPhoto);
         } else {
           const files = [...form.elements.files.files];
           for (let index = 0; index < files.length; index += 1) {
             banner(`Загружаю фото ${index + 1} из ${files.length}…`);
             const prepared = await photoUploadFile(files[index]);
-            await uploadProjectFile(prepared, {
+            const data=await uploadProjectFile(prepared, {
               kind: 'photo', project_id: projectId, stage_id: form.elements.stage.value,
               shot_date: form.elements.shotDate.value, caption: form.elements.caption.value,
-            });
+            });patchMapped('projectPhotos',data.photo,mapProjectPhoto);
           }
         }
         dlg.close();
-        await refreshOperations(item ? 'Фото обновлено' : 'Фото загружены');
+        render();banner(item ? 'Фото обновлено' : 'Фото загружены','ok');
       } catch (error) { banner('Не удалось сохранить фото: ' + error.message, 'error'); }
       finally { submit.disabled = false; }
     };
@@ -261,21 +274,24 @@
     if (remove) remove.onclick = async () => {
       if (!confirm('Удалить фотографию из объекта и хранилища?')) return;
       try {
-        await operationsApi('delete_photo', { id: item.id });
+        await operationsApi('delete_photo', { id: item.id });removeFromState('projectPhotos',item.id);
         dlg.close();
-        await refreshOperations('Фото удалено');
+        render();banner('Фото удалено','ok');
       } catch (error) { banner('Не удалось удалить фото: ' + error.message, 'error'); }
     };
+    const open=dlg.querySelector('[data-open-photo]');if(open)open.onclick=()=>openPhotoViewer(item);
     dlg.showModal();
   }
 
-  function openPhotoViewer(photo) {
+  async function openPhotoViewer(photo) {
     let dlg = document.getElementById('photoViewerDlg');
     if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'photoViewerDlg'; document.body.appendChild(dlg); }
-    dlg.innerHTML = `<div class="photo-viewer"><button type="button" data-close>Закрыть</button>${photo.fileUrl ? `<img src="${esc(photo.fileUrl)}" alt="${esc(photo.caption || 'Фото объекта')}">` : '<div class="empty">Фото временно недоступно</div>'}<div><strong>${esc(photo.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: photo.stageId })?.name || 'Без этапа')} · ${esc(photo.authorName)}</small></div></div>`;
+    dlg.innerHTML = '<div class="photo-viewer"><button type="button" data-close>Закрыть</button><div class="empty">Загружаем фото…</div></div>';
+    dlg.querySelector('[data-close]').onclick = () => dlg.close();dlg.showModal();
+    try{const url=await getProjectFileUrl('photo',photo);dlg.innerHTML=`<div class="photo-viewer"><button type="button" data-close>Закрыть</button><img src="${esc(url)}" alt="${esc(photo.caption || 'Фото объекта')}"><div><strong>${esc(photo.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: photo.stageId })?.name || 'Без этапа')} · ${esc(photo.authorName)}</small></div></div>`}
+    catch(error){dlg.innerHTML='<div class="photo-viewer"><button type="button" data-close>Закрыть</button><div class="empty">Фото временно недоступно</div></div>'}
     dlg.querySelector('[data-close]').onclick = () => dlg.close();
     dlg.querySelector('img')?.addEventListener('click', () => dlg.close());
-    dlg.showModal();
   }
 
   function renderProjectPhotos(project) {
@@ -286,7 +302,7 @@
     $('#projectSection').innerHTML = `
       <div class="page-title-row"><div><h2>Фото объекта</h2><p>Галерея объекта с привязкой к этапам</p></div>${project.status !== 'archived' ? '<button id="addProjectPhoto" class="btn primary">+ Фото</button>' : ''}</div>
       <section class="card operation-filter"><label>Этап<select id="photoStageFilter"><option value="">Все этапы</option>${stages.map(stage => `<option value="${esc(stage.id)}" ${photoStageFilter === stage.id ? 'selected' : ''}>${esc(stage.name)}</option>`).join('')}</select></label><span>${items.length} фото</span></section>
-      <div class="photo-grid">${items.length ? items.map(item => `<article class="card photo-card"><button data-view-photo="${esc(item.id)}">${item.fileUrl ? `<img src="${esc(item.fileUrl)}" alt="${esc(item.caption || 'Фото объекта')}" loading="lazy">` : '<span class="photo-missing">Фото недоступно</span>'}</button><div><strong>${esc(item.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: item.stageId })?.name || 'Без этапа')} · ${esc(projectDate((item.shotDate || item.createdAt).slice(0, 10)))}</small><button class="btn secondary" data-edit-photo="${esc(item.id)}">Изменить</button></div></article>`).join('') : '<div class="card empty">Фотографий по выбранному этапу пока нет</div>'}</div>`;
+      <div class="photo-grid">${items.length ? items.map(item => `<article class="card photo-card"><button data-view-photo="${esc(item.id)}"><span class="photo-missing">Открыть фото</span></button><div><strong>${esc(item.caption || 'Без подписи')}</strong><small>${esc(assignmentStage({ stageId: item.stageId })?.name || 'Без этапа')} · ${esc(projectDate((item.shotDate || item.createdAt).slice(0, 10)))}</small><button class="btn secondary" data-edit-photo="${esc(item.id)}">Изменить</button></div></article>`).join('') : '<div class="card empty">Фотографий по выбранному этапу пока нет</div>'}</div>`;
     document.getElementById('addProjectPhoto')?.addEventListener('click', () => openProjectPhotoDialog(project.id));
     document.getElementById('photoStageFilter').onchange = event => { photoStageFilter = event.target.value; renderProjectPhotos(project); };
     document.querySelectorAll('[data-view-photo]').forEach(button => button.onclick = () => openPhotoViewer(all.find(item => item.id === button.dataset.viewPhoto)));

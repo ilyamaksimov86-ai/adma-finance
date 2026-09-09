@@ -142,4 +142,5 @@ dialog::backdrop{background:rgba(15,23,42,.48);backdrop-filter:blur(2px)}.sheeth
   .finance-values{grid-template-columns:1fr}.photo-grid{gap:8px}.photo-card>button{height:132px}.document-card>.badge{display:none}
   .knowledge-filters{grid-template-columns:1fr}.knowledge-filters>span{grid-column:auto}.knowledge-check-row{grid-template-columns:22px minmax(0,1fr)}.knowledge-order{grid-column:2;justify-content:flex-end}.knowledge-card{grid-template-columns:40px minmax(0,1fr)}.knowledge-card-icon{width:40px;height:40px}
 }
+.knowledge-attachment [data-open-knowledge-attachment]{display:flex;align-items:center;gap:10px;min-width:0;padding:0;border:0;background:transparent;color:inherit;text-align:left}.knowledge-attachment [data-open-knowledge-attachment]>span:last-child{display:grid;min-width:0}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

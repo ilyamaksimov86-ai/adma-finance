@@ -35,7 +35,9 @@ test('tech cards, checklist templates and issues validate fields',()=>{
 test('knowledge files use signed private access and durable cleanup',()=>{
  assert.match(upload,/storage\.from\('knowledge-files'\)\.upload/);
  assert.match(upload,/removeStorageObject\(db,'knowledge-files',path\)/);
- assert.match(api,/createSignedUrl\(row\.storage_path,3600\)/);
+ assert.match(api,/action==='get_file_url'/);
+ assert.match(api,/createSignedUrl\(file\.data\.storage_path,3600\)/);
+ assert.doesNotMatch(api,/attachments:await/);
  assert.match(api,/removeStorageObject\(db,'knowledge-files',file\.storage_path\)/);
  assert.match(api,/delete_attachment/);
 });

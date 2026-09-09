@@ -23,7 +23,6 @@ Deno.serve(async req=>{
   const uploaded=await db.storage.from('knowledge-files').upload(path,new Uint8Array(await file.arrayBuffer()),{contentType:mime,cacheControl:'3600',upsert:false});if(uploaded.error)throw uploaded.error;
   const row:any={tech_card_id:entity==='tech_card'?entityId:null,issue_id:entity==='issue'?entityId:null,storage_path:path,original_name:originalName,mime_type:mime,size_bytes:file.size,created_by:user.id};
   const inserted=await db.from('knowledge_attachments').insert(row).select('*').single();if(inserted.error){await removeStorageObject(db,'knowledge-files',path);throw inserted.error}
-  const signed=await db.storage.from('knowledge-files').createSignedUrl(path,3600);
-  return json({ok:true,attachment:{...inserted.data,file_url:signed.data?.signedUrl||null}});
+  return json({ok:true,attachment:inserted.data});
  }catch(error){const message=error instanceof Error?error.message:'unknown_error';return json({error:message},error instanceof AuthError?error.status:500)}
 });

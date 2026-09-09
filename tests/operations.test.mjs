@@ -50,7 +50,10 @@ test('file bytes use private Storage with cleanup handling',()=>{
  assert.match(uploadSource,/removeStorageObject\(db,'project-files',path\)/);
  assert.match(apiSource,/removeStorageObject\(db,'project-files',old\.storage_path\)/);
  assert.match(apiSource,/cleanup_pending:cleanupPending/);
- assert.match(apiSource,/createSignedUrl\(row\.storage_path,3600\)/);
+ assert.match(apiSource,/action === 'get_file_url'/);
+ assert.match(apiSource,/await requireProject\(file\.project_id\)/);
+ assert.match(apiSource,/createSignedUrl\(file\.storage_path,3600\)/);
+ assert.doesNotMatch(apiSource,/documents:await|photos:await/);
 });
 
 test('frontend scopes modules to the open project and computes overdue tasks',()=>{

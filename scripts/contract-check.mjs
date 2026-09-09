@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 const contracts = JSON.parse(await readFile(new URL('../contracts/api-contracts.json', import.meta.url), 'utf8'));
 const failures = [];
 for (const field of ['version','compatibility','errors','endpoints']) if (!(field in contracts)) failures.push(`contract root missing ${field}`);
-const actionEndpoints = ['adma-api','finance-api','masters-api','project-operations-api','designers-api','leads-api'];
+const actionEndpoints = ['adma-api','finance-api','masters-api','project-operations-api','designers-api','leads-api','knowledge-api'];
 for (const endpoint of actionEndpoints) {
   const contract = contracts.endpoints[endpoint];
   if (!contract?.actions) { failures.push(`${endpoint}: actions missing`); continue; }

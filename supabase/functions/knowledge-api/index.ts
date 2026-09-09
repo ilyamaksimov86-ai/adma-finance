@@ -17,7 +17,6 @@ Deno.serve(async req=>{
  try{
   const body=await req.json(),db=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,{auth:{persistSession:false}}),user=await requireUser(db,body,Deno.env.get('TELEGRAM_BOT_TOKEN'));
   if(!['owner','partner'].includes(user.role))throw new AuthError('forbidden',403);const action=String(body.action||'load');
-  const sign=async(rows:any[])=>Promise.all((rows||[]).map(async row=>{const {data,error}=await db.storage.from('knowledge-files').createSignedUrl(row.storage_path,3600);return{...row,file_url:error?null:data?.signedUrl||null,file_error:error?'file_unavailable':null}}));
   if(action==='load'){
    const [cards,items,issues,attachments]=await Promise.all([
     db.from('knowledge_tech_cards').select('*,author:app_users!knowledge_tech_cards_created_by_fkey(first_name,last_name,web_login,telegram_username)').order('updated_at',{ascending:false}),
@@ -25,7 +24,10 @@ Deno.serve(async req=>{
     db.from('knowledge_issues').select('*,author:app_users!knowledge_issues_created_by_fkey(first_name,last_name,web_login,telegram_username)').order('updated_at',{ascending:false}),
     db.from('knowledge_attachments').select('*,author:app_users!knowledge_attachments_created_by_fkey(first_name,last_name,web_login,telegram_username)').order('created_at',{ascending:false}),
    ]);for(const result of [cards,items,issues,attachments])if(result.error)throw result.error;
-   return json({ok:true,tech_cards:cards.data||[],checklist_items:items.data||[],issues:issues.data||[],attachments:await sign(attachments.data||[])});
+   return json({ok:true,tech_cards:cards.data||[],checklist_items:items.data||[],issues:issues.data||[],attachments:attachments.data||[]});
+  }
+  if(action==='get_file_url'){
+   const attachmentId=id(body.id),file=await db.from('knowledge_attachments').select('storage_path').eq('id',attachmentId).single();if(file.error)throw file.error;const signed=await db.storage.from('knowledge-files').createSignedUrl(file.data.storage_path,3600);if(signed.error)throw signed.error;return json({ok:true,url:signed.data?.signedUrl||null,expires_in:3600});
   }
   if(action==='save_tech_card'){
    const raw=body.tech_card||{},value=techInput(raw),items=checklistInput(body.checklist_items||[]);let data,error;

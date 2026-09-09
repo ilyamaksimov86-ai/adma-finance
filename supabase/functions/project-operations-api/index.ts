@@ -66,11 +66,6 @@ Deno.serve(async req => {
       if (error) throw error;
       if (data.project_id !== projectId) throw new Error('link_project_mismatch');
     };
-    const signRows = async (rows: any[]) => Promise.all(rows.map(async row => {
-      const {data,error} = await db.storage.from('project-files').createSignedUrl(row.storage_path,3600);
-      return {...row, file_url:error?null:data?.signedUrl||null, file_error:error?'file_unavailable':null};
-    }));
-
     if (action === 'load') {
       const requested = body.project_id ? await requireProject(body.project_id) : null;
       const ids = requested ? [requested] : await allowedProjectIds();
@@ -86,7 +81,20 @@ Deno.serve(async req => {
       };
       const [documents,tasks,photos] = await Promise.all([scoped('project_documents'),scoped('project_tasks'),scoped('project_photos')]);
       for (const result of [documents,tasks,photos]) if (result.error) throw result.error;
-      return json({ok:true, documents:await signRows(documents.data||[]), tasks:tasks.data||[], photos:await signRows(photos.data||[])});
+      return json({ok:true, documents:documents.data||[], tasks:tasks.data||[], photos:photos.data||[]});
+    }
+
+    if (action === 'get_file_url') {
+      const kind = String(body.kind || '');
+      const table = kind === 'document' ? 'project_documents' : kind === 'photo' ? 'project_photos' : '';
+      if (!table) throw new Error('invalid_file_kind');
+      const itemId = id(body.id);
+      const {data:file,error:fileError} = await db.from(table).select('project_id,storage_path').eq('id',itemId).single();
+      if (fileError) throw fileError;
+      await requireProject(file.project_id);
+      const {data,error} = await db.storage.from('project-files').createSignedUrl(file.storage_path,3600);
+      if (error) throw error;
+      return json({ok:true,url:data?.signedUrl||null,expires_in:3600});
     }
 
     if (action === 'save_document') {
@@ -167,7 +175,7 @@ Deno.serve(async req => {
     return json({error:'unknown_action'},400);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown_error';
-    const bad = ['invalid_id','invalid_date','required_field','field_too_long','invalid_document_category','invalid_task_status','invalid_task_priority','multiple_assignees','link_project_mismatch','assignee_inactive','assignee_not_on_project','master_not_on_project'];
+    const bad = ['invalid_id','invalid_date','required_field','field_too_long','invalid_document_category','invalid_task_status','invalid_task_priority','multiple_assignees','link_project_mismatch','assignee_inactive','assignee_not_on_project','master_not_on_project','invalid_file_kind'];
     return json({error:message}, error instanceof AuthError ? error.status : bad.includes(message) ? 400 : 500);
   }
 });
