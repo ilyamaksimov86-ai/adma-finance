@@ -226,7 +226,7 @@ API payloads и форматы ошибок должны быть стабиль
 | Финальный агрегированный Dashboard | included | Этап 10 завершён; реальные агрегаты и «Требует внимания» |
 | Техническое укрепление | included | Feature-модули, architecture/contract checks и durable Storage cleanup |
 | Финальный UI/UX | included | Единая production-дизайн-система внедрена без изменения функциональности |
-| База знаний ADMA | in_progress | Следующий roadmap-этап; реализация не начата |
+| База знаний ADMA | included | V1: Техкарты, checklist templates, Косяки, поиск, категории и private attachments |
 | Нативное iOS/Android приложение | deferred | Будущий отдельный клиент к существующему backend/API |
 | Push-уведомления | deferred | Реализовывать только при отдельной задаче |
 | Background cleanup orphan-файлов | included | Приватная очередь, Vault-authenticated hourly worker и backoff |
