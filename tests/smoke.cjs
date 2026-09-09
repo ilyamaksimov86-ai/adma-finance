@@ -172,7 +172,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       const board=page.locator(selector),columns=board.locator('.designer-column');
       await board.evaluate(el=>{let probe=document.getElementById('funnel-scroll-probe');if(!probe){probe=document.createElement('div');probe.id='funnel-scroll-probe';probe.style.height='1400px';el.parentElement.append(probe)}el.scrollIntoView({block:'start'})});
       await board.evaluate(el=>el.scrollLeft=0);
-      const assertVerticalWheel=async(x,y)=>{const before=await page.evaluate(()=>scrollY);for(let i=0;i<3;i++)await wheelAt(x,y,0,160);await new Promise(r=>setTimeout(r,200));const metrics=await board.evaluate((el,args)=>({pageTop:args.pageTop,after:scrollY,boardTop:el.scrollTop,clientHeight:el.clientHeight,scrollHeight:el.scrollHeight,overflowY:getComputedStyle(el).overflowY,point:document.elementFromPoint(args.x,args.y)?.className}),{pageTop:before,x,y});console.log('FUNNEL_WHEEL_METRICS '+JSON.stringify(metrics));await until(()=>page.evaluate(value=>scrollY>value,before))};
+      const assertVerticalWheel=async(x,y)=>{const before=await page.evaluate(()=>scrollY);for(let i=0;i<3;i++)await wheelAt(x,y,0,160);await until(()=>page.evaluate(value=>scrollY>value,before))};
       const resetPage=()=>board.evaluate(el=>el.scrollIntoView({block:'start'}));
       const empty=board.locator('.empty').first();let box=await empty.boundingBox();
       await assertVerticalWheel(box.x+box.width/2,box.y+Math.min(box.height/2,20));await resetPage();
