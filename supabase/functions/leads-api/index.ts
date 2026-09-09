@@ -39,7 +39,7 @@ Deno.serve(async req=>{
    const [leads,interactions,designers,projects,users]=await Promise.all([
     db.from('leads').select('*,designer:designers!leads_designer_id_fkey(id,full_name,studio,status,is_archived),responsible:app_users!leads_responsible_user_id_fkey(id,first_name,last_name,web_login,telegram_username),project:projects!leads_project_id_fkey(id,name,status)').order('created_at',{ascending:false}),
     db.from('lead_interactions').select('*,author:app_users!lead_interactions_created_by_fkey(first_name,last_name,web_login,telegram_username)').order('occurred_at',{ascending:false}),
-    db.from('designers').select('id,full_name,studio,status,is_archived').eq('is_archived',false).neq('status','inactive').order('full_name'),
+    db.from('designers').select('id,full_name,studio,status,is_archived').eq('is_archived',false).order('full_name'),
     db.from('projects').select('id,name,status,designer_id'),
     db.from('app_users').select('id,first_name,last_name,web_login,telegram_username,role,is_active').eq('is_active',true).in('role',['owner','partner']),
    ]);for(const result of [leads,interactions,designers,projects,users])if(result.error)throw result.error;return json({ok:true,leads:leads.data||[],interactions:interactions.data||[],designers:designers.data||[],projects:projects.data||[],users:users.data||[]});
@@ -47,7 +47,7 @@ Deno.serve(async req=>{
   if(action==='save_lead'){
    const raw=body.lead||{},value=leadInput(raw);
    if(value.responsible_user_id){const {data,error}=await db.from('app_users').select('role,is_active').eq('id',value.responsible_user_id).single();if(error)throw error;if(!data.is_active||!['owner','partner'].includes(data.role))throw new Error('invalid_responsible')}
-   if(value.designer_id){const {data,error}=await db.from('designers').select('id,status,is_archived').eq('id',value.designer_id).single();if(error)throw error;if(data.is_archived||data.status==='inactive')throw new Error('inactive_designer')}
+   if(value.designer_id){const {data,error}=await db.from('designers').select('id,status,is_archived').eq('id',value.designer_id).single();if(error)throw error;if(data.is_archived)throw new Error('inactive_designer')}
    if(raw.id){const {data:old,error}=await db.from('leads').select('project_id').eq('id',id(raw.id)).single();if(error)throw error;if(old.project_id&&value.status!=='contract')throw new Error('converted_lead_status_locked')}
    const {data:existing,error:existingError}=await db.from('leads').select('id,client_name,phone,telegram,project_name,status,project_id');if(existingError)throw existingError;
    const matches=(existing||[]).filter((item:any)=>item.id!==raw.id&&((value.phone&&normalizedPhone(item.phone)===normalizedPhone(value.phone))||(value.telegram&&normalized(item.telegram)===normalized(value.telegram))||(normalized(item.client_name)===normalized(value.client_name)&&normalized(item.project_name)===normalized(value.project_name))));

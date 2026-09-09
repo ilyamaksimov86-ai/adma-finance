@@ -5,7 +5,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 const cors={"Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type","Access-Control-Allow-Methods":"POST, OPTIONS"};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,"Content-Type":"application/json"}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const statuses=new Set(['found','first_contact','replied','meeting','partner','referred_lead','has_project','inactive']);
+const statuses=new Set(['found','to_review','contacted','replied','meeting','agreed','referred_lead','has_project','ignored','rejected']);
 const priorities=new Set(['low','normal','high']);
 const interactionTypes=new Set(['message','call','meeting','note','other']);
 const directions=new Set(['incoming','outgoing']);
@@ -42,12 +42,12 @@ Deno.serve(async req=>{
    const {data:existing,error:existingError}=await db.from('designers').select('id,full_name,studio,instagram,telegram,phone').eq('is_archived',false);if(existingError)throw existingError;
    const matches=(existing||[]).filter((item:any)=>item.id!==raw.id&&((value.instagram&&normalized(item.instagram)===normalized(value.instagram))||(value.telegram&&normalized(item.telegram)===normalized(value.telegram))||(value.phone&&normalizedPhone(item.phone)===normalizedPhone(value.phone))||(normalized(item.full_name)===normalized(value.full_name)&&normalized(item.studio)===normalized(value.studio))));
    if(matches.length&&!body.allow_duplicate)return json({error:'possible_duplicate',matches},409);
-   let data,error,previous:any=null;if(raw.id){const itemId=id(raw.id);const old=await db.from('designers').select('status').eq('id',itemId).single();if(old.error)throw old.error;previous=old.data;({data,error}=await db.from('designers').update({...value,is_archived:value.status==='inactive',updated_at:new Date().toISOString()}).eq('id',itemId).select('*').single())}else({data,error}=await db.from('designers').insert({...value,is_archived:value.status==='inactive',created_by:user.id}).select('*').single());if(error)throw error;
+   let data,error,previous:any=null;if(raw.id){const itemId=id(raw.id);const old=await db.from('designers').select('status').eq('id',itemId).single();if(old.error)throw old.error;previous=old.data;({data,error}=await db.from('designers').update({...value,updated_at:new Date().toISOString()}).eq('id',itemId).select('*').single())}else({data,error}=await db.from('designers').insert({...value,created_by:user.id}).select('*').single());if(error)throw error;
    if(previous&&previous.status!==value.status)await db.from('designer_interactions').insert({designer_id:data.id,interaction_type:'note',comment:`Статус изменён: ${previous.status} → ${value.status}`,created_by:user.id});
    return json({ok:true,designer:data});
   }
   if(action==='archive_designer'){
-   const itemId=id(body.id),archived=body.archived!==false;const {data,error}=await db.from('designers').update({status:archived?'inactive':'found',is_archived:archived,updated_at:new Date().toISOString()}).eq('id',itemId).select('*').single();if(error)throw error;return json({ok:true,designer:data});
+   const itemId=id(body.id),archived=body.archived!==false;const {data,error}=await db.from('designers').update({is_archived:archived,updated_at:new Date().toISOString()}).eq('id',itemId).select('*').single();if(error)throw error;return json({ok:true,designer:data});
   }
   if(action==='add_interaction'){
    const value=body.interaction||{},designerId=id(value.designer_id),type=String(value.interaction_type||'note'),direction=value.direction?String(value.direction):null;if(!interactionTypes.has(type))throw new Error('invalid_interaction_type');if(direction&&!directions.has(direction))throw new Error('invalid_direction');

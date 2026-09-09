@@ -11,6 +11,13 @@
         "storage": "numeric(14,2)",
         "semantics": "Informational only; excluded from profit and Dashboard calculations. Create omission and empty string become null; update omission preserves the value; null clears it."
       }
+    },
+    "Designer": {
+      "status": {
+        "type": "string",
+        "enum": ["found", "to_review", "contacted", "replied", "meeting", "agreed", "referred_lead", "has_project", "ignored", "rejected"],
+        "semantics": "Current CRM funnel state. Archiving is represented separately by is_archived. Lead creation advances a non-archived designer to referred_lead without regressing has_project; Lead to Project conversion advances to has_project."
+      }
     }
   },
   "compatibility": "Existing action names and response fields are stable. Changes are additive unless a versioned endpoint is introduced.",
@@ -83,7 +90,7 @@
       "transport": "json-command",
       "actions": {
         "load": { "request": [], "response": ["ok", "designers", "interactions", "users", "projects"] },
-        "save_designer": { "request": ["designer"], "response": ["ok", "designer"] },
+        "save_designer": { "request": ["designer"], "response": ["ok", "designer"], "designer_model": "Designer" },
         "archive_designer": { "request": ["id", "archived"], "response": ["ok", "designer"] },
         "add_interaction": { "request": ["interaction"], "response": ["ok", "interaction"] }
       }
