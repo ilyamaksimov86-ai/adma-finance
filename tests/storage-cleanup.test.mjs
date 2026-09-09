@@ -8,6 +8,7 @@ const worker=readFileSync(new URL('../supabase/functions/storage-cleanup/index.t
 const adma=readFileSync(new URL('../supabase/functions/adma-api/index.ts',import.meta.url),'utf8');
 const finance=readFileSync(new URL('../supabase/functions/finance-api/index.ts',import.meta.url),'utf8');
 const operations=readFileSync(new URL('../supabase/functions/project-operations-api/index.ts',import.meta.url),'utf8');
+const knowledge=readFileSync(new URL('../supabase/functions/knowledge-api/index.ts',import.meta.url),'utf8');
 
 test('successful storage deletion does not enqueue cleanup',async()=>{
  let queued=false;
@@ -52,4 +53,5 @@ test('all storage-backed delete APIs use the durable helper',()=>{
  assert.match(adma,/removeStorageObject\(db,"receipts",old\.receipt_path\)/);
  assert.match(finance,/removeStorageObject\(db,'finance-documents',path\)/);
  assert.match(operations,/removeStorageObject\(db,'project-files',old\.storage_path\)/);
+ assert.match(knowledge,/removeStorageObject\(db,'knowledge-files',file\.storage_path\)/);
 });

@@ -4,7 +4,7 @@
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
-    const modules=[['Финансы',loadFinanceCloud],['Команда',loadMastersCloud],['Задачи и файлы',loadProjectOperationsCloud],['Дизайнеры',loadDesignersCloud],['Заявки',loadLeadsCloud]];
+    const modules=[['Финансы',loadFinanceCloud],['Команда',loadMastersCloud],['Задачи и файлы',loadProjectOperationsCloud],['Дизайнеры',loadDesignersCloud],['Заявки',loadLeadsCloud],['База знаний',loadKnowledgeCloud]];
     const results=await Promise.allSettled(modules.map(([,load])=>load()));
     dashboardLoadErrors=results.flatMap((result,index)=>result.status==='rejected'?[modules[index][0]]:[]);
     save();
@@ -32,13 +32,14 @@
     if (state.tab === 'masters') return renderMastersCloud();
     if (state.tab === 'designers') return renderDesignersCloud();
     if (state.tab === 'leads') return renderLeadsCloud();
+    if (state.tab === 'knowledge') return renderKnowledgeCloud();
     return renderMoreCloud();
   }
 
   function renderMoreCloud() {
     const role = currentUser?.role || 'foreman';
     const name = [currentUser?.first_name, currentUser?.last_name].filter(Boolean).join(' ');
-    $('#app').innerHTML = `${pageHeader('ADMA · ПРОФИЛЬ', 'Ещё', 'Разделы приложения и настройки доступа')}<div class="mobile-module-links"><button class="card mobile-module-link" data-mobile-route="leads"><span>◇</span><strong>Заявки</strong><small>Воронка обращений</small></button><button class="card mobile-module-link" data-mobile-route="designers"><span>✦</span><strong>Дизайнеры</strong><small>Партнёрская CRM</small></button><button class="card mobile-module-link" data-mobile-route="masters"><span>◎</span><strong>Мастера</strong><small>Команда и занятость</small></button></div><div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
+    $('#app').innerHTML = `${pageHeader('ADMA · ПРОФИЛЬ', 'Ещё', 'Разделы приложения и настройки доступа')}<div class="mobile-module-links"><button class="card mobile-module-link" data-mobile-route="leads"><span>◇</span><strong>Заявки</strong><small>Воронка обращений</small></button><button class="card mobile-module-link" data-mobile-route="designers"><span>✦</span><strong>Дизайнеры</strong><small>Партнёрская CRM</small></button><button class="card mobile-module-link" data-mobile-route="masters"><span>◎</span><strong>Мастера</strong><small>Команда и занятость</small></button><button class="card mobile-module-link" data-mobile-route="knowledge"><span>▤</span><strong>База знаний</strong><small>Техкарты и косяки</small></button></div><div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
       <div class="card"><small class="muted">Ваш доступ</small><strong style="display:block;margin-top:6px">${roleLabel(role)}</strong>${name ? `<div class="muted" style="margin-top:4px">${esc(name)}</div>` : ''}</div>
       ${role === 'owner' ? '<div class="card"><strong>Команда</strong><p class="muted">Новые сотрудники сначала открывают Mini App через @Admafinance_bot. После этого они появятся здесь и будут ждать подтверждения.</p><button id="teamAccess" class="btn primary" style="width:100%">Команда и доступ</button></div>' : ''}
       <div class="card"><strong>Вход в браузере</strong><p class="muted">${currentUser?.web_login ? 'Ваш логин: ' + esc(currentUser.web_login) : 'Настройте логин и пароль для входа без Telegram.'}</p><button id="webCredentials" class="btn secondary">${currentUser?.web_login ? 'Изменить пароль' : 'Настроить вход'}</button>${!initData ? '<button id="webLogout" class="btn danger" style="margin-left:8px">Выйти</button>' : ''}</div>
@@ -143,7 +144,7 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       state.stages = (cloud.stages || []).map(mapStage);
-      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud(),loadLeadsCloud()]);
+      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud(),loadLeadsCloud(),loadKnowledgeCloud()]);
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();

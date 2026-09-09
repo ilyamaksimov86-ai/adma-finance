@@ -14,10 +14,10 @@
   let savingExpense = false;
   let projectSection = 'overview';
   let projectFinanceSection = 'summary';
-  const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'more']);
+  const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'knowledge', 'more']);
   const globalTabLabels = {
     home: 'Главная', projects: 'Объекты', finance: 'Финансы',
-    leads: 'Заявки', designers: 'Дизайнеры', masters: 'Мастера', more: 'Ещё',
+    leads: 'Заявки', designers: 'Дизайнеры', masters: 'Мастера', knowledge: 'База знаний', more: 'Ещё',
   };
   const projectStatuses = {
     active: 'В работе', preparation: 'Подготовка', in_progress: 'В работе',
@@ -150,6 +150,10 @@
     return post('leads-api', { ...await AdmaAuth.credentials(), action, ...extra });
   }
 
+  async function knowledgeApi(action, extra = {}) {
+    return post('knowledge-api', { ...await AdmaAuth.credentials(), action, ...extra });
+  }
+
   function mapProject(p) {
     return {
       id: p.id,
@@ -215,3 +219,7 @@
   const mapDesignerInteraction=x=>({...x,designerId:x.designer_id,occurredAt:x.occurred_at,type:x.interaction_type,authorName:authorName(x)});
   const mapLead=x=>({...x,clientName:x.client_name,projectName:x.project_name,area:x.area_sqm==null?null:Number(x.area_sqm),budget:x.estimated_budget==null?null:Number(x.estimated_budget),hasDesignProject:x.has_design_project,designProjectUrl:x.design_project_url||'',desiredStartDate:x.desired_start_date||'',designerId:x.designer_id||'',responsibleUserId:x.responsible_user_id||'',lastContactAt:x.last_contact_at||'',nextContactAt:x.next_contact_at||'',nextAction:x.next_action||'',lossReason:x.loss_reason||'',lossComment:x.loss_comment||'',projectId:x.project_id||'',createdAt:x.created_at});
   const mapLeadInteraction=x=>({...x,leadId:x.lead_id,occurredAt:x.occurred_at,type:x.interaction_type,authorName:authorName(x)});
+  const mapKnowledgeTechCard=x=>({...x,createdAt:x.created_at,updatedAt:x.updated_at,authorName:authorName(x)});
+  const mapKnowledgeChecklistItem=x=>({...x,techCardId:x.tech_card_id,text:x.item_text,position:Number(x.position||0)});
+  const mapKnowledgeIssue=x=>({...x,createdAt:x.created_at,updatedAt:x.updated_at,authorName:authorName(x)});
+  const mapKnowledgeAttachment=x=>({...x,techCardId:x.tech_card_id||'',issueId:x.issue_id||'',filePath:x.storage_path,fileUrl:x.file_url||'',createdAt:x.created_at,authorName:authorName(x)});
