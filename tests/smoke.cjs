@@ -158,6 +158,37 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       await input.press('Backspace');await input.evaluate(el=>el.setSelectionRange(1,3));await input.pressSequentially('Z');
       await input.evaluate(el=>{el.setRangeText('paste',el.selectionStart,el.selectionEnd,'end');el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste',data:'paste'}))});
       assert.equal(await input.evaluate(el=>document.activeElement===el&&window.__stableSearchInput===el&&el.selectionStart===el.selectionEnd),true);await input.fill('');assert.equal(await input.evaluate(el=>window.__stableSearchInput===el),true);assert.equal(requests.length,start);
+      if(selector==='#designerSearch')await assertNativeFunnelScroll('.designer-funnel','Отказ');
+      if(selector==='#leadSearch')await assertNativeFunnelScroll('.lead-funnel','Проиграна');
+    };
+    const wheelAt = async (x,y,deltaX,deltaY) => {await page.mouse.move(x,y);await page.mouse.wheel(deltaX,deltaY)};
+    const touchSwipeAt = async (x,y,deltaX,deltaY) => {
+      const cdp=await page.context().newCDPSession(page);await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+      for(let i=1;i<=5;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+deltaX*i/5,y:y+deltaY*i/5}]});
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});await cdp.detach();
+    };
+    const assertNativeFunnelScroll = async (selector,lastStatus) => {
+      const board=page.locator(selector),columns=board.locator('.designer-column');
+      await page.evaluate(()=>{document.body.style.minHeight='2400px';window.scrollTo(0,0)});
+      await board.evaluate(el=>el.scrollLeft=0);
+      const empty=board.locator('.empty').first();let box=await empty.boundingBox();
+      await wheelAt(box.x+box.width/2,box.y+Math.min(box.height/2,20),0,360);await until(()=>page.evaluate(()=>scrollY>0));
+      await page.evaluate(()=>scrollTo(0,0));
+      const first=await columns.nth(0).boundingBox(),second=await columns.nth(1).boundingBox();
+      await wheelAt((first.x+first.width+second.x)/2,first.y+70,0,360);await until(()=>page.evaluate(()=>scrollY>0));
+      await page.evaluate(()=>scrollTo(0,0));
+      const card=board.locator('.designer-card').first();await card.evaluate(el=>el.closest('.crm-funnel-board').scrollLeft=el.closest('.designer-column').offsetLeft);box=await card.boundingBox();
+      await wheelAt(box.x+box.width/2,box.y+Math.min(box.height/2,36),0,360);await until(()=>page.evaluate(()=>scrollY>0));
+      await page.evaluate(()=>scrollTo(0,0));await board.evaluate(el=>el.scrollLeft=0);box=await board.boundingBox();
+      await wheelAt(box.x+Math.min(box.width/2,300),box.y+80,640,0);await until(()=>board.evaluate(el=>el.scrollLeft>0));assert.equal(await page.evaluate(()=>scrollY),0);
+      await board.evaluate(el=>el.scrollLeft=el.scrollWidth);assert.equal(await columns.last().locator('h3').innerText(),lastStatus);assert.equal(await board.evaluate(el=>Math.abs(el.scrollLeft-(el.scrollWidth-el.clientWidth))<2),true);
+      assert.equal(await page.locator('body').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+      const viewport=page.viewportSize();await page.setViewportSize({width:390,height:844});await page.evaluate(()=>scrollTo(0,0));await board.evaluate(el=>el.scrollLeft=0);box=await board.boundingBox();
+      await touchSwipeAt(box.x+box.width/2,box.y+Math.min(120,box.height/2),0,-240);await until(()=>page.evaluate(()=>scrollY>0));
+      await page.evaluate(()=>scrollTo(0,0));await board.evaluate(el=>el.scrollLeft=0);box=await board.boundingBox();await touchSwipeAt(box.x+box.width-40,box.y+Math.min(120,box.height/2),-240,0);await until(()=>board.evaluate(el=>el.scrollLeft>0));assert.equal(await page.evaluate(()=>scrollY),0);
+      await page.evaluate(()=>scrollTo(0,0));box=await board.boundingBox();await touchSwipeAt(box.x+box.width/2,box.y+Math.min(120,box.height/2),-80,-220);await until(()=>page.evaluate(()=>scrollY>0));
+      assert.equal(await page.locator('body').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);await page.setViewportSize(viewport);await page.evaluate(()=>scrollTo(0,0));
     };
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     if(web) {
