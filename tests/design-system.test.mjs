@@ -14,6 +14,7 @@ test('canonical final design tokens and Inter typography are active',()=>{
 });
 
 test('CRM funnels keep native two-axis gestures without trapping page scroll',()=>{
+  assert.match(css,/html,body\{[^}]*overscroll-behavior-y:auto/);
   assert.match(css,/\.crm-funnel-board\{[^}]*overflow-x:auto;[^}]*overflow-y:visible;/);
   assert.match(css,/\.crm-funnel-board\{[^}]*overscroll-behavior-inline:contain;[^}]*overscroll-behavior-block:auto;/);
   assert.match(css,/\.crm-funnel-board\{[^}]*touch-action:pan-x pan-y;/);
