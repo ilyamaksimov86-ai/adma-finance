@@ -40,8 +40,8 @@
     if (state.tab === 'finance') return renderGlobalFinanceCloud();
     if (state.tab === 'masters') return renderMastersCloud();
     if (state.tab === 'designers') return renderDesignersCloud();
-    if (state.tab === 'leads') return renderLeadsCloud();
-    if (state.tab === 'knowledge') return renderKnowledgeCloud();
+    if (state.tab === 'leads') return renderLeadsCloudHotfix();
+    if (state.tab === 'knowledge') return renderKnowledgeCloudHotfix();
     return renderMoreCloud();
   }
 
