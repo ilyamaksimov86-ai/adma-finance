@@ -6,7 +6,7 @@ const html=readFileSync(new URL('../index.html',import.meta.url),'utf8');
 const css=readFileSync(new URL('../design-system.css',import.meta.url),'utf8');
 
 test('canonical final design tokens and Inter typography are active',()=>{
-  assert.match(html,/design-system\.css\?v=30/);
+  assert.match(html,/design-system\.css\?v=31/);
   for(const token of ['--bg:#f8fafc','--card:#fff','--text:#0f172a','--border:#e2e8f0','--blue:#2563eb']) assert.match(css,new RegExp(token));
   assert.match(css,/Inter,-apple-system/);
   assert.match(css,/font-variant-numeric:tabular-nums/);
