@@ -14,6 +14,16 @@ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const optionalText=(value:any,max:number)=>{if(value==null||value==="")return null;const text=String(value).trim();if(!text)return null;if(text.length>max)throw new Error("field_too_long");return text};
 function projectInput(input:any,partial=false){
   const p=input||{},result:any={};
+  if(!partial||"contract_amount" in p){
+    const value=p.contract_amount;
+    if(value==null||value==="")result.contract_amount=null;
+    else{
+      if((typeof value!=="number"&&typeof value!=="string")||(typeof value==="string"&&!/^\d+(?:\.\d+)?$/.test(value.trim())))return {error:"invalid_contract_amount"};
+      const amount=Number(value);
+      if(!Number.isFinite(amount)||amount<0.01||amount>999999999999.99)return {error:"invalid_contract_amount"};
+      result.contract_amount=amount;
+    }
+  }
   if(!partial||"name" in p){const name=String(p.name||"").trim();if(!name)return {error:"name_required"};if(name.length>160)return {error:"field_too_long"};result.name=name}
   const textFields:any={address:300,client_name:160,client_phone:40,comment:2000,contract_number:100};
   for(const [key,max] of Object.entries(textFields))if(!partial||key in p){try{result[key]=optionalText(p[key],Number(max))}catch{return {error:"field_too_long"}}}

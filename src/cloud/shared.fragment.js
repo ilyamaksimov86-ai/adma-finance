@@ -168,6 +168,7 @@
       plannedEndDate: p.planned_end_date || '',
       actualEndDate: p.actual_end_date || '',
       contractNumber: p.contract_number || '',
+      contractAmount: p.contract_amount == null ? null : Number(p.contract_amount),
       warrantyUntil: p.warranty_until || '',
       designerId: p.designer_id || '',
     };

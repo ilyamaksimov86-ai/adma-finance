@@ -52,6 +52,7 @@
       <label>Статус<select id="pStatus"><option value="preparation">Подготовка</option><option value="in_progress">В работе</option><option value="paused">Приостановлен</option><option value="handover">Сдача</option><option value="warranty">Гарантия</option><option value="archived" disabled>Архив</option></select></label>
       <label>Адрес<input id="pAddress" maxlength="300" placeholder="Москва"></label>
       <div class="grid"><label>Площадь, м²<input id="pArea" type="number" inputmode="decimal" min="1" max="10000" step="0.01"></label><label>Номер договора<input id="pContract" maxlength="100"></label></div>
+      <label>Сумма договора, ₽<input id="pContractAmount" type="number" inputmode="decimal" min="0.01" max="999999999999.99" step="0.01"></label>
       <label>Заказчик<input id="pClient" maxlength="160"></label>
       <label>Телефон заказчика<input id="pClientPhone" type="tel" maxlength="40" autocomplete="tel"></label>
       <label>Дизайнер<select id="pDesigner"><option value="">Не назначен</option></select></label>
@@ -90,6 +91,6 @@
   <dialog id="detailDlg"><div id="detail" class="dialog-body"></div></dialog>
   <script src="auth.js?v=23"></script>
   <script src="app.js?v=23"></script>
-  <script src="cloud.js?v=31"></script>
+  <script src="cloud.js?v=32"></script>
 </body>
 </html>

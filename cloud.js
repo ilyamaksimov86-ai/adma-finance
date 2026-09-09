@@ -169,6 +169,7 @@
       plannedEndDate: p.planned_end_date || '',
       actualEndDate: p.actual_end_date || '',
       contractNumber: p.contract_number || '',
+      contractAmount: p.contract_amount == null ? null : Number(p.contract_amount),
       warrantyUntil: p.warranty_until || '',
       designerId: p.designer_id || '',
     };
@@ -720,6 +721,7 @@
     pPlannedEndDate.value = p.plannedEndDate || '';
     pActualEndDate.value = p.actualEndDate || '';
     pContract.value = p.contractNumber || '';
+    pContractAmount.value = p.contractAmount ?? '';
     pWarrantyUntil.value = p.warrantyUntil || '';
     pDesigner.value = p.designerId || '';
     const title = projectDlg.querySelector('.sheethead h2');
@@ -823,7 +825,7 @@
   function projectHeader(p) {
     const summary = scheduleSummary(p.id);
     const meta = [p.address, p.area ? `${p.area} м²` : ''].filter(Boolean).join(' · ');
-    return `<div class="object-breadcrumb"><button id="back" class="breadcrumb-button"><strong>Объекты</strong></button> / ${esc(p.name)}</div><section class="card object-head"><div class="row"><div class="grow"><div class="row object-title-row"><h2>${esc(p.name)}</h2><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted">${esc(meta || 'Адрес и площадь не указаны')}</div><div class="muted object-meta">${esc(p.client ? `Заказчик: ${p.client}` : 'Заказчик не указан')}</div></div><div class="object-actions">${p.status !== 'archived' ? '<button id="objectOperation" class="btn primary">+ Операция</button>' : ''}${canManageProjects() ? `<button id="editProjectCloud" class="btn secondary">Редактировать</button><button id="archiveProjectCloud" class="btn ${p.status === 'archived' ? 'primary' : 'danger'}">${p.status === 'archived' ? 'Вернуть в работу' : 'В архив'}</button>` : ''}</div></div><div class="object-schedule"><div><small>Готовность</small><strong>${summary.stages.length ? summary.progress + '%' : '—'}</strong></div><div><small>Текущий этап</small><strong>${esc(summary.current?.name || (summary.stages.length ? 'Ожидает начала' : 'График не заполнен'))}</strong></div><div><small>Начало</small><strong>${esc(projectDate(p.startDate))}</strong></div><div><small>Отклонение</small><strong>${esc(delayLabel(summary))}</strong></div></div></section><nav class="project-tabs" aria-label="Разделы объекта">${projectSections.map(([id, label]) => `<button class="project-tab ${projectSection === id ? 'active' : ''}" data-project-section="${id}">${label}</button>`).join('')}</nav><div id="projectSection"></div>`;
+    return `<div class="object-breadcrumb"><button id="back" class="breadcrumb-button"><strong>Объекты</strong></button> / ${esc(p.name)}</div><section class="card object-head"><div class="row"><div class="grow"><div class="row object-title-row"><h2>${esc(p.name)}</h2><span class="badge ${projectStatusClass(p.status)}">${projectStatusLabel(p.status)}</span></div><div class="muted">${esc(meta || 'Адрес и площадь не указаны')}</div><div class="muted object-meta">Сумма договора: <span data-contract-amount style="font-variant-numeric:tabular-nums">${p.contractAmount == null ? 'Не указана' : money(p.contractAmount)}</span></div><div class="muted object-meta">${esc(p.client ? `Заказчик: ${p.client}` : 'Заказчик не указан')}</div></div><div class="object-actions">${p.status !== 'archived' ? '<button id="objectOperation" class="btn primary">+ Операция</button>' : ''}${canManageProjects() ? `<button id="editProjectCloud" class="btn secondary">Редактировать</button><button id="archiveProjectCloud" class="btn ${p.status === 'archived' ? 'primary' : 'danger'}">${p.status === 'archived' ? 'Вернуть в работу' : 'В архив'}</button>` : ''}</div></div><div class="object-schedule"><div><small>Готовность</small><strong>${summary.stages.length ? summary.progress + '%' : '—'}</strong></div><div><small>Текущий этап</small><strong>${esc(summary.current?.name || (summary.stages.length ? 'Ожидает начала' : 'График не заполнен'))}</strong></div><div><small>Начало</small><strong>${esc(projectDate(p.startDate))}</strong></div><div><small>Отклонение</small><strong>${esc(delayLabel(summary))}</strong></div></div></section><nav class="project-tabs" aria-label="Разделы объекта">${projectSections.map(([id, label]) => `<button class="project-tab ${projectSection === id ? 'active' : ''}" data-project-section="${id}">${label}</button>`).join('')}</nav><div id="projectSection"></div>`;
   }
 
   function renderProjectOverview(p) {
@@ -1428,6 +1430,7 @@
           planned_end_date: optionalValue(pPlannedEndDate.value),
           actual_end_date: optionalValue(pActualEndDate.value),
           contract_number: optionalValue(pContract.value),
+          contract_amount: pContractAmount.value === '' ? null : Number(pContractAmount.value),
           warranty_until: optionalValue(pWarrantyUntil.value),
           designer_id: optionalValue(pDesigner.value),
         };

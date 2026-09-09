@@ -1,6 +1,18 @@
 {
   "$schema": "./api-contracts.schema.json",
   "version": 1,
+  "models": {
+    "Project": {
+      "contract_amount": {
+        "type": ["number", "null"],
+        "optional": true,
+        "minimum": 0.01,
+        "maximum": 999999999999.99,
+        "storage": "numeric(14,2)",
+        "semantics": "Informational only; excluded from profit and Dashboard calculations. Create omission and empty string become null; update omission preserves the value; null clears it."
+      }
+    }
+  },
   "compatibility": "Existing action names and response fields are stable. Changes are additive unless a versioned endpoint is introduced.",
   "errors": {
     "shape": { "error": "string", "details": "object|null", "cleanup_pending": "boolean|undefined" },
@@ -14,8 +26,8 @@
         "list_users": { "request": [], "response": ["ok", "users"] },
         "set_project_members": { "request": ["project_id", "user_ids"], "response": ["ok"] },
         "update_user_access": { "request": ["user_id", "role", "is_active"], "response": ["ok", "user"] },
-        "create_project": { "request": ["project"], "response": ["ok", "project"] },
-        "update_project": { "request": ["project.id", "project"], "response": ["ok", "project"] },
+        "create_project": { "request": ["project"], "response": ["ok", "project"], "project_model": "Project" },
+        "update_project": { "request": ["project.id", "project"], "response": ["ok", "project"], "project_model": "Project" },
         "create_stage": { "request": ["stage.project_id", "stage"], "response": ["ok", "stage"] },
         "update_stage": { "request": ["stage.id", "stage"], "response": ["ok", "stage"] },
         "delete_stage": { "request": ["id"], "response": ["ok"] },
