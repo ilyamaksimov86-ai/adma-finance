@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 
 const migration=readFileSync(new URL('../supabase/migrations/20260908150000_add_leads_crm_stage8.sql',import.meta.url),'utf8');
+const statusMigration=readFileSync(new URL('../supabase/migrations/20260909123945_update_designer_status_pipeline.sql',import.meta.url),'utf8');
 const indexMigration=readFileSync(new URL('../supabase/migrations/20260908151000_add_leads_designer_index.sql',import.meta.url),'utf8');
 const apiSource=readFileSync(new URL('../supabase/functions/leads-api/index.ts',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../cloud.js',import.meta.url),'utf8');
@@ -27,8 +28,8 @@ test('lead metadata requires designer source and loss reason',()=>{
 
 test('contact and project conversion business rules live in backend',()=>{
  assert.match(migration,/select \* into target from public\.leads where id=p_lead_id for update/);assert.match(migration,/lead_already_converted/);assert.match(migration,/if target\.status<>'contract'/);
- assert.match(migration,/insert into public\.projects/);assert.match(migration,/update public\.leads set project_id=new_project\.id/);assert.match(migration,/return to_jsonb\(new_project\)/);assert.match(migration,/status='has_project'/);
- assert.match(migration,/status='referred_lead'/);assert.match(migration,/sync_lead_last_contact/);assert.match(apiSource,/db\.rpc\('convert_lead_to_project'/);
+ assert.match(statusMigration,/insert into public\.projects/);assert.match(statusMigration,/update public\.leads set project_id=new_project\.id/);assert.match(statusMigration,/return to_jsonb\(new_project\)/);assert.match(statusMigration,/status='has_project'/);
+ assert.match(statusMigration,/status='referred_lead'/);assert.match(migration,/sync_lead_last_contact/);assert.match(apiSource,/db\.rpc\('convert_lead_to_project'/);
 });
 
 test('frontend computes overdue state and reuses linked entities',()=>{
