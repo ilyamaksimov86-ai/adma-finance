@@ -91,7 +91,7 @@ dialog::backdrop{background:rgba(15,23,42,.48);backdrop-filter:blur(2px)}.sheeth
 .finance-lines>div{border-color:var(--border)}.compact-record{min-height:56px}
 .master-avatar,.lead-avatar{width:42px;height:42px;flex-basis:42px;border-radius:10px}.availability.free{background:var(--green-soft);color:var(--green)}.availability.releasing{background:var(--amber-soft);color:#b45309}.availability.busy{background:var(--red-soft);color:#b91c1c}
 .designer-column{padding:12px;border:1px solid var(--border);border-radius:14px;background:#f1f5f9}.designer-card.overdue,.lead-card.overdue{border-color:#fecaca;background:#fff7f7}
-.crm-funnel-board{display:flex!important;flex-wrap:nowrap;align-items:flex-start;gap:14px;width:100%;max-width:100%;min-width:0;padding:0 0 12px;overflow-x:auto;overflow-y:hidden;overscroll-behavior-inline:contain;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable}
+.crm-funnel-board{display:flex!important;flex-wrap:nowrap;align-items:flex-start;gap:14px;width:100%;max-width:100%;min-width:0;padding:0 0 12px;overflow-x:auto;overflow-y:visible;overscroll-behavior-inline:contain;overscroll-behavior-block:auto;touch-action:pan-x pan-y;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable}
 .crm-funnel-board>.designer-column{flex:0 0 clamp(280px,24vw,320px);width:clamp(280px,24vw,320px);min-width:280px;scroll-snap-align:start}
 .designer-card strong,.lead-card strong{font-size:13px}.designer-card small,.lead-card small{font-size:11px}.danger-text{color:#b91c1c!important}
 .lead-avatar{background:var(--blue-soft);color:var(--blue)}.lead-filters,.designer-filters{margin-bottom:18px}.designer-view-buttons .primary{box-shadow:none}
