@@ -27,7 +27,7 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api','leads-api','storage-cleanup']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api','leads-api','knowledge-api','knowledge-file-upload','storage-cleanup']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
  }
@@ -50,6 +50,11 @@ test('foreman cannot load, mutate or convert leads',async()=>{
 test('foreman cannot load or mutate profit data',async()=>{
  for(const body of [{action:'load'},{action:'save_act',act:{}},{action:'save_company_expense',expense:{}}]){
   const r=await handler('finance-api',{},actor)(request(body));assert.equal(r.status,403);
+ }
+});
+test('foreman cannot load or mutate the knowledge base',async()=>{
+ for(const body of [{action:'load'},{action:'save_tech_card',tech_card:{}},{action:'save_issue',issue:{}}]){
+  const r=await handler('knowledge-api',{},actor)(request(body));assert.equal(r.status,403);
  }
 });
 test('finance file upload authenticates before storage',async()=>{
@@ -87,6 +92,12 @@ test('project file upload authenticates before touching private storage',async()
  const db={auth:{getUser:async()=>({error:Error('forged')})},storage:{from:()=>{touched=true;}}};
  const form=new FormData();form.append('accessToken','forged');form.append('kind','photo');form.append('project_id','11111111-1111-4111-8111-111111111111');form.append('file',new File(['test'],'photo.jpg',{type:'image/jpeg'}));
  const r=await handler('project-file-upload',db)(new Request('https://test.invalid',{method:'POST',body:form}));assert.equal(r.status,401);assert.equal(touched,false);
+});
+test('knowledge file upload authenticates before touching private storage',async()=>{
+ let touched=false;
+ const db={auth:{getUser:async()=>({error:Error('forged')})},storage:{from:()=>{touched=true;}}};
+ const form=new FormData();form.append('accessToken','forged');form.append('entity','tech_card');form.append('entity_id','11111111-1111-4111-8111-111111111111');form.append('file',new File(['test'],'guide.pdf',{type:'application/pdf'}));
+ const r=await handler('knowledge-file-upload',db)(new Request('https://test.invalid',{method:'POST',body:form}));assert.equal(r.status,401);assert.equal(touched,false);
 });
 test('project metadata is normalized and validated',()=>{
  const parse=projectParser();

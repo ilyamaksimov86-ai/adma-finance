@@ -85,9 +85,21 @@
         "convert_lead": { "request": ["lead_id", "project"], "response": ["ok", "lead", "project"] }
       }
     },
+    "knowledge-api": {
+      "transport": "json-command",
+      "actions": {
+        "load": { "request": [], "response": ["ok", "tech_cards", "checklist_items", "issues", "attachments"] },
+        "save_tech_card": { "request": ["tech_card.title", "tech_card.category", "checklist_items"], "response": ["ok", "tech_card", "checklist_items"] },
+        "delete_tech_card": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
+        "save_issue": { "request": ["issue.title", "issue.category"], "response": ["ok", "issue"] },
+        "delete_issue": { "request": ["id"], "response": ["ok", "cleanup_pending?"] },
+        "delete_attachment": { "request": ["id"], "response": ["ok", "cleanup_pending?"] }
+      }
+    },
     "receipt-upload": { "transport": "multipart", "request": ["auth credentials", "file"], "response": ["ok", "path", "url"] },
     "finance-file-upload": { "transport": "multipart", "request": ["auth credentials", "entity", "file"], "response": ["ok", "path", "url"] },
     "project-file-upload": { "transport": "multipart", "request": ["auth credentials", "project_id", "kind", "file"], "response": ["ok", "record"] },
+    "knowledge-file-upload": { "transport": "multipart", "request": ["auth credentials", "entity", "entity_id", "file"], "response": ["ok", "attachment"] },
     "reimbursement-pdf": { "transport": "json-or-text", "request": ["auth credentials", "project_id", "expense_ids?"], "response": ["PDF binary"] }
   }
 }

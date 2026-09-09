@@ -14,7 +14,7 @@ for (const endpoint of actionEndpoints) {
   for (const action of documented) if (!implemented.has(action)) failures.push(`${endpoint}: contract action not implemented ${action}`);
   for (const [action, shape] of Object.entries(contract.actions)) if (!Array.isArray(shape.request) || !Array.isArray(shape.response)) failures.push(`${endpoint}.${action}: request/response arrays required`);
 }
-for (const endpoint of ['receipt-upload','finance-file-upload','project-file-upload','reimbursement-pdf']) if (!contracts.endpoints[endpoint]) failures.push(`missing file contract ${endpoint}`);
+for (const endpoint of ['receipt-upload','finance-file-upload','project-file-upload','knowledge-file-upload','reimbursement-pdf']) if (!contracts.endpoints[endpoint]) failures.push(`missing file contract ${endpoint}`);
 if (failures.length) {
   console.error(failures.map(x => `- ${x}`).join('\n'));
   process.exit(1);

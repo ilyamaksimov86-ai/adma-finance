@@ -15,10 +15,10 @@
   let savingExpense = false;
   let projectSection = 'overview';
   let projectFinanceSection = 'summary';
-  const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'more']);
+  const globalTabs = new Set(['home', 'projects', 'finance', 'leads', 'designers', 'masters', 'knowledge', 'more']);
   const globalTabLabels = {
     home: 'Главная', projects: 'Объекты', finance: 'Финансы',
-    leads: 'Заявки', designers: 'Дизайнеры', masters: 'Мастера', more: 'Ещё',
+    leads: 'Заявки', designers: 'Дизайнеры', masters: 'Мастера', knowledge: 'База знаний', more: 'Ещё',
   };
   const projectStatuses = {
     active: 'В работе', preparation: 'Подготовка', in_progress: 'В работе',
@@ -151,6 +151,10 @@
     return post('leads-api', { ...await AdmaAuth.credentials(), action, ...extra });
   }
 
+  async function knowledgeApi(action, extra = {}) {
+    return post('knowledge-api', { ...await AdmaAuth.credentials(), action, ...extra });
+  }
+
   function mapProject(p) {
     return {
       id: p.id,
@@ -216,6 +220,10 @@
   const mapDesignerInteraction=x=>({...x,designerId:x.designer_id,occurredAt:x.occurred_at,type:x.interaction_type,authorName:authorName(x)});
   const mapLead=x=>({...x,clientName:x.client_name,projectName:x.project_name,area:x.area_sqm==null?null:Number(x.area_sqm),budget:x.estimated_budget==null?null:Number(x.estimated_budget),hasDesignProject:x.has_design_project,designProjectUrl:x.design_project_url||'',desiredStartDate:x.desired_start_date||'',designerId:x.designer_id||'',responsibleUserId:x.responsible_user_id||'',lastContactAt:x.last_contact_at||'',nextContactAt:x.next_contact_at||'',nextAction:x.next_action||'',lossReason:x.loss_reason||'',lossComment:x.loss_comment||'',projectId:x.project_id||'',createdAt:x.created_at});
   const mapLeadInteraction=x=>({...x,leadId:x.lead_id,occurredAt:x.occurred_at,type:x.interaction_type,authorName:authorName(x)});
+  const mapKnowledgeTechCard=x=>({...x,createdAt:x.created_at,updatedAt:x.updated_at,authorName:authorName(x)});
+  const mapKnowledgeChecklistItem=x=>({...x,techCardId:x.tech_card_id,text:x.item_text,position:Number(x.position||0)});
+  const mapKnowledgeIssue=x=>({...x,createdAt:x.created_at,updatedAt:x.updated_at,authorName:authorName(x)});
+  const mapKnowledgeAttachment=x=>({...x,techCardId:x.tech_card_id||'',issueId:x.issue_id||'',filePath:x.storage_path,fileUrl:x.file_url||'',createdAt:x.created_at,authorName:authorName(x)});
 
   let globalFinanceSection = 'summary';
 
@@ -281,12 +289,23 @@
 
   async function loadLeadsCloud(){if(!canManageProjects()){state.leads=[];state.leadInteractions=[];state.leadUsers=[];return}const data=await leadsApi('load');state.leads=(data.leads||[]).map(mapLead);state.leadInteractions=(data.interactions||[]).map(mapLeadInteraction);state.leadUsers=data.users||[]}
 
+  let knowledgeSection='tech',knowledgeSearch='',knowledgeCategory='';
+  const knowledgeBaseCategories=['Демонтаж','Возведение стен','Электрика','Сантехника','Штукатурка','Стяжка','ГКЛ','Плитка','Малярные работы','Напольные покрытия','Чистовая электрика','Чистовая сантехника','Прочее'];
+  async function loadKnowledgeCloud(){const data=await knowledgeApi('load');state.knowledgeTechCards=(data.tech_cards||[]).map(mapKnowledgeTechCard);state.knowledgeChecklistItems=(data.checklist_items||[]).map(mapKnowledgeChecklistItem);state.knowledgeIssues=(data.issues||[]).map(mapKnowledgeIssue);state.knowledgeAttachments=(data.attachments||[]).map(mapKnowledgeAttachment)}
+  const knowledgeItemsFor=cardId=>(state.knowledgeChecklistItems||[]).filter(x=>x.techCardId===cardId).sort((a,b)=>a.position-b.position);
+  const knowledgeAttachmentsFor=(entity,id)=>(state.knowledgeAttachments||[]).filter(x=>entity==='tech_card'?x.techCardId===id:x.issueId===id);
+  const knowledgeDate=value=>value?fmt(String(value).slice(0,10)):'—';
+  const knowledgeExcerpt=value=>{const plain=String(value||'').replace(/\s+/g,' ').trim();return plain.length>180?plain.slice(0,177)+'…':plain};
+  function knowledgeCategories(){return [...new Set([...knowledgeBaseCategories,...(state.knowledgeTechCards||[]).map(x=>x.category),...(state.knowledgeIssues||[]).map(x=>x.category)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'))}
+  async function uploadKnowledgeFile(file,entity,entityId){const credentials=await AdmaAuth.credentials();return new Promise((resolve,reject)=>{const form=new FormData();Object.entries(credentials).forEach(([key,value])=>form.append(key,value));form.append('entity',entity);form.append('entity_id',entityId);form.append('file',file,file.name);const xhr=new XMLHttpRequest();xhr.open('POST',SUPABASE_FUNCTIONS+'/knowledge-file-upload',true);xhr.timeout=60000;xhr.onload=()=>{let data={};try{data=JSON.parse(xhr.responseText||'{}')}catch{}if(xhr.status>=200&&xhr.status<300&&data.ok)resolve(data);else reject(new Error(data.error||`HTTP_${xhr.status}`))};xhr.onerror=()=>reject(new Error('Ошибка загрузки файла'));xhr.ontimeout=()=>reject(new Error('Загрузка файла заняла слишком много времени'));xhr.send(form)})}
+  async function refreshKnowledge(message=''){await loadKnowledgeCloud();render();if(message)banner(message,'ok')}
+
   async function loadCloud() {
     const data = await api('load');
     state.projects = (data.projects || []).map(mapProject);
     state.expenses = (data.expenses || []).map(mapExpense);
     state.stages = (data.stages || []).map(mapStage);
-    const modules=[['Финансы',loadFinanceCloud],['Команда',loadMastersCloud],['Задачи и файлы',loadProjectOperationsCloud],['Дизайнеры',loadDesignersCloud],['Заявки',loadLeadsCloud]];
+    const modules=[['Финансы',loadFinanceCloud],['Команда',loadMastersCloud],['Задачи и файлы',loadProjectOperationsCloud],['Дизайнеры',loadDesignersCloud],['Заявки',loadLeadsCloud],['База знаний',loadKnowledgeCloud]];
     const results=await Promise.allSettled(modules.map(([,load])=>load()));
     dashboardLoadErrors=results.flatMap((result,index)=>result.status==='rejected'?[modules[index][0]]:[]);
     save();
@@ -652,7 +671,7 @@
       button.onclick = () => navigateGlobal(button.dataset.sideTab);
     });
     document.querySelectorAll('.tabs [data-tab]').forEach(button => {
-      const mobileTab = ['designers', 'masters'].includes(state.tab) ? 'more' : state.tab;
+      const mobileTab = ['designers', 'masters', 'knowledge'].includes(state.tab) ? 'more' : state.tab;
       button.classList.toggle('active', state.project ? button.dataset.tab === 'projects' : button.dataset.tab === mobileTab);
       button.onclick = () => navigateGlobal(button.dataset.tab);
     });
@@ -1619,6 +1638,29 @@
     $('#app').innerHTML = `${pageHeader(`ADMA · ${title.toUpperCase()}`, title, 'Раздел встроен в единую структуру приложения')}${moduleScreen(icon, title, description, relation)}`;
   }
 
+  function knowledgeAttachmentHtml(entity,id){const files=knowledgeAttachmentsFor(entity,id);return `<div class="knowledge-attachments">${files.map(file=>`<div class="knowledge-attachment"><a href="${esc(file.fileUrl||'#')}" ${file.fileUrl?'target="_blank" rel="noopener"':''}><span class="file-icon">${file.mime_type?.startsWith('image/')?'IMG':'DOC'}</span><span><strong>${esc(file.original_name||'Файл')}</strong><small>${esc(bytesLabel(file.size_bytes))}</small></span></a><button type="button" class="btn danger" data-delete-knowledge-attachment="${esc(file.id)}" aria-label="Удалить вложение">×</button></div>`).join('')}${files.length?'':'<div class="empty compact-empty">Вложений пока нет</div>'}</div>`}
+  function bindKnowledgeAttachmentDeletes(dlg){dlg.querySelectorAll('[data-delete-knowledge-attachment]').forEach(button=>button.onclick=async()=>{if(!confirm('Удалить это вложение?'))return;button.disabled=true;try{await knowledgeApi('delete_attachment',{id:button.dataset.deleteKnowledgeAttachment});await loadKnowledgeCloud();const row=button.closest('.knowledge-attachment');if(row)row.remove();banner('Вложение удалено','ok')}catch(error){button.disabled=false;banner('Не удалось удалить вложение: '+error.message,'error')}})}
+  function checklistRow(value=''){return `<div class="knowledge-check-row"><span class="knowledge-check-icon">☐</span><input name="checkItem" maxlength="1000" required value="${esc(value)}" placeholder="Пункт инструкции"><span class="knowledge-order"><button type="button" data-move="up" aria-label="Выше">↑</button><button type="button" data-move="down" aria-label="Ниже">↓</button><button type="button" data-remove aria-label="Удалить">×</button></span></div>`}
+  function bindChecklistEditor(dlg){const list=dlg.querySelector('[data-checklist]');dlg.querySelector('[data-add-check]').onclick=()=>{list.insertAdjacentHTML('beforeend',checklistRow());list.lastElementChild.querySelector('input').focus()};list.onclick=event=>{const row=event.target.closest('.knowledge-check-row');if(!row)return;if(event.target.matches('[data-remove]'))row.remove();if(event.target.matches('[data-move="up"]')&&row.previousElementSibling)list.insertBefore(row,row.previousElementSibling);if(event.target.matches('[data-move="down"]')&&row.nextElementSibling)list.insertBefore(row.nextElementSibling,row)}}
+  function openTechCardDialog(cardId=''){const item=(state.knowledgeTechCards||[]).find(x=>x.id===cardId),checklist=item?knowledgeItemsFor(item.id):[];const dlg=dynamicDialog('knowledgeTechDlg',item?'Техкарта':'Новая техкарта',`
+    <label>Название<input name="title" required maxlength="240" value="${esc(item?.title||'')}" placeholder="Штукатурка стен по маякам"></label>
+    <label>Этап / категория<input name="category" list="knowledgeCategories" required maxlength="160" value="${esc(item?.category||'')}" placeholder="Штукатурка"><datalist id="knowledgeCategories">${knowledgeCategories().map(x=>`<option value="${esc(x)}">`).join('')}</datalist></label>
+    <label>Описание / технология выполнения<textarea name="description" rows="8" maxlength="20000">${esc(item?.description||'')}</textarea></label>
+    <section class="knowledge-checklist-editor"><div class="section compact"><div><h2>Чек-лист</h2><p>Шаблон инструкции без отметок выполнения</p></div><button type="button" class="btn secondary" data-add-check>+ Пункт</button></div><div data-checklist>${checklist.map(x=>checklistRow(x.text)).join('')}</div></section>
+    <label>Добавить фото / файлы<input name="files" type="file" multiple accept="application/pdf,.doc,.docx,.xls,.xlsx,image/jpeg,image/png,image/webp"></label>
+    ${item?`<div class="knowledge-meta">Создана ${knowledgeDate(item.createdAt)} · обновлена ${knowledgeDate(item.updatedAt)}</div>${knowledgeAttachmentHtml('tech_card',item.id)}<button type="button" class="btn danger full-button" data-delete>Удалить техкарту</button>`:''}`);
+    bindChecklistEditor(dlg);bindKnowledgeAttachmentDeletes(dlg);dlg.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,controls=[...form.querySelectorAll('input,textarea,button')];controls.forEach(x=>x.disabled=true);try{const result=await knowledgeApi('save_tech_card',{tech_card:{id:item?.id,title:form.elements.title.value,category:form.elements.category.value,description:form.elements.description.value},checklist_items:[...form.querySelectorAll('[name="checkItem"]')].map(input=>({text:input.value}))});const files=[...form.elements.files.files];for(const file of files)await uploadKnowledgeFile(file,'tech_card',result.tech_card.id);dlg.close();await refreshKnowledge(item?'Техкарта обновлена':'Техкарта создана')}catch(error){banner('Не удалось сохранить техкарту: '+error.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const remove=dlg.querySelector('[data-delete]');if(remove)remove.onclick=async()=>{if(!confirm(`Удалить техкарту «${item.title}» и её вложения?`))return;try{await knowledgeApi('delete_tech_card',{id:item.id});dlg.close();await refreshKnowledge('Техкарта удалена')}catch(error){banner('Не удалось удалить техкарту: '+error.message,'error')}};dlg.showModal()}
+  function openKnowledgeIssueDialog(issueId=''){const item=(state.knowledgeIssues||[]).find(x=>x.id===issueId);const dlg=dynamicDialog('knowledgeIssueDlg',item?'Косяк':'Новый косяк',`
+    <label>Название проблемы<input name="title" required maxlength="240" value="${esc(item?.title||'')}" placeholder="Трещина в месте примыкания ГКЛ"></label>
+    <label>Этап / категория<input name="category" list="knowledgeIssueCategories" required maxlength="160" value="${esc(item?.category||'')}"><datalist id="knowledgeIssueCategories">${knowledgeCategories().map(x=>`<option value="${esc(x)}">`).join('')}</datalist></label>
+    <label>Что произошло<textarea name="problem" rows="4" maxlength="12000">${esc(item?.problem||'')}</textarea></label><label>Причина<textarea name="cause" rows="4" maxlength="12000">${esc(item?.cause||'')}</textarea></label><label>Как исправили / способ решения<textarea name="solution" rows="4" maxlength="12000">${esc(item?.solution||'')}</textarea></label><label>Как не допустить повторения<textarea name="prevention" rows="4" maxlength="12000">${esc(item?.prevention||'')}</textarea></label>
+    <label>Добавить фото / файлы<input name="files" type="file" multiple accept="application/pdf,.doc,.docx,.xls,.xlsx,image/jpeg,image/png,image/webp"></label>
+    ${item?`<div class="knowledge-meta">Создан ${knowledgeDate(item.createdAt)} · обновлён ${knowledgeDate(item.updatedAt)}</div>${knowledgeAttachmentHtml('issue',item.id)}<button type="button" class="btn danger full-button" data-delete>Удалить косяк</button>`:''}`);
+    bindKnowledgeAttachmentDeletes(dlg);dlg.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,controls=[...form.querySelectorAll('input,textarea,button')];controls.forEach(x=>x.disabled=true);try{const result=await knowledgeApi('save_issue',{issue:{id:item?.id,title:form.elements.title.value,category:form.elements.category.value,problem:form.elements.problem.value,cause:form.elements.cause.value,solution:form.elements.solution.value,prevention:form.elements.prevention.value}});for(const file of [...form.elements.files.files])await uploadKnowledgeFile(file,'issue',result.issue.id);dlg.close();await refreshKnowledge(item?'Косяк обновлён':'Косяк создан')}catch(error){banner('Не удалось сохранить косяк: '+error.message,'error')}finally{controls.forEach(x=>x.disabled=false)}};
+    const remove=dlg.querySelector('[data-delete]');if(remove)remove.onclick=async()=>{if(!confirm(`Удалить косяк «${item.title}» и его вложения?`))return;try{await knowledgeApi('delete_issue',{id:item.id});dlg.close();await refreshKnowledge('Косяк удалён')}catch(error){banner('Не удалось удалить косяк: '+error.message,'error')}};dlg.showModal()}
+  function renderKnowledgeCloud(){const tech=knowledgeSection==='tech',source=tech?(state.knowledgeTechCards||[]):(state.knowledgeIssues||[]),query=knowledgeSearch.toLocaleLowerCase('ru');const items=source.filter(item=>{if(knowledgeCategory&&item.category!==knowledgeCategory)return false;const text=tech?[item.title,item.category,item.description,...knowledgeItemsFor(item.id).map(x=>x.text)].join(' '):[item.title,item.category,item.problem,item.cause,item.solution,item.prevention].join(' ');return!query||text.toLocaleLowerCase('ru').includes(query)});const action=tech?'+ Добавить техкарту':'+ Добавить косяк';$('#app').innerHTML=`${pageHeader('ADMA · ОПЫТ','База знаний','Технологии и решения ADMA',`<button id="addKnowledge" class="btn primary">${action}</button>`)}${sectionTabs([['tech','Техкарты'],['issues','Косяки']],knowledgeSection,'data-knowledge-section')}<section class="knowledge-filters"><label>Поиск<input id="knowledgeSearch" type="search" value="${esc(knowledgeSearch)}" placeholder="Название, этап или содержание"></label><label>Этап / категория<select id="knowledgeCategory"><option value="">Все категории</option>${knowledgeCategories().map(x=>`<option value="${esc(x)}" ${knowledgeCategory===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label><span>${items.length} записей</span></section><div class="knowledge-list">${items.map(item=>tech?`<button class="card knowledge-card" data-tech-card="${esc(item.id)}"><span class="knowledge-card-icon">▤</span><span class="grow"><span class="badge neutral">${esc(item.category)}</span><strong>${esc(item.title)}</strong><small>${esc(knowledgeExcerpt(item.description)||'Описание не добавлено')}</small><span class="knowledge-card-meta">${knowledgeItemsFor(item.id).length} пунктов · обновлено ${knowledgeDate(item.updatedAt)}</span></span></button>`:`<button class="card knowledge-card issue" data-issue="${esc(item.id)}"><span class="knowledge-card-icon">!</span><span class="grow"><span class="badge pending">${esc(item.category)}</span><strong>${esc(item.title)}</strong><small>${esc(knowledgeExcerpt(item.problem)||'Описание проблемы не добавлено')}</small><span class="knowledge-card-meta">Обновлено ${knowledgeDate(item.updatedAt)}</span></span></button>`).join('')||`<div class="card empty">${tech?'Техкарт':'Косяков'} по выбранным условиям пока нет</div>`}</div>`;document.querySelectorAll('[data-knowledge-section]').forEach(button=>button.onclick=()=>{knowledgeSection=button.dataset.knowledgeSection;knowledgeSearch='';knowledgeCategory='';renderKnowledgeCloud()});document.getElementById('knowledgeSearch').oninput=event=>{knowledgeSearch=event.target.value;renderKnowledgeCloud();const input=document.getElementById('knowledgeSearch');input.focus();input.setSelectionRange(knowledgeSearch.length,knowledgeSearch.length)};document.getElementById('knowledgeCategory').onchange=event=>{knowledgeCategory=event.target.value;renderKnowledgeCloud()};document.getElementById('addKnowledge').onclick=()=>tech?openTechCardDialog():openKnowledgeIssueDialog();document.querySelectorAll('[data-tech-card]').forEach(button=>button.onclick=()=>openTechCardDialog(button.dataset.techCard));document.querySelectorAll('[data-issue]').forEach(button=>button.onclick=()=>openKnowledgeIssueDialog(button.dataset.issue))}
+
   function renderMastersCloud(){
     if(!canManageProjects()){$('#app').innerHTML=`${pageHeader('ADMA · МАСТЕРА','Мастера','Глобальная база доступна владельцу и партнёру')}${moduleScreen('◎','Доступ ограничен','Назначенных на ваши объекты мастеров можно посмотреть в разделе «Команда» нужного объекта.','Объект → Команда')}`;return}
     const all=(state.masters||[]).filter(m=>showArchivedMasters?!m.isActive:m.isActive);const filtered=all.filter(m=>{const availability=masterAvailability(m.id);const haystack=[m.name,m.phone,m.telegram,masterSpecialtyLabels[m.primarySpecialty],...m.additionalSkills.map(x=>masterSpecialtyLabels[x]||x)].join(' ').toLowerCase();return(!masterSearch||haystack.includes(masterSearch.toLowerCase()))&&(!masterSpecialtyFilter||m.primarySpecialty===masterSpecialtyFilter||m.additionalSkills.includes(masterSpecialtyFilter))&&(!masterAvailabilityFilter||availability.key===masterAvailabilityFilter)});
@@ -1688,13 +1730,14 @@
     if (state.tab === 'masters') return renderMastersCloud();
     if (state.tab === 'designers') return renderDesignersCloud();
     if (state.tab === 'leads') return renderLeadsCloud();
+    if (state.tab === 'knowledge') return renderKnowledgeCloud();
     return renderMoreCloud();
   }
 
   function renderMoreCloud() {
     const role = currentUser?.role || 'foreman';
     const name = [currentUser?.first_name, currentUser?.last_name].filter(Boolean).join(' ');
-    $('#app').innerHTML = `${pageHeader('ADMA · ПРОФИЛЬ', 'Ещё', 'Разделы приложения и настройки доступа')}<div class="mobile-module-links"><button class="card mobile-module-link" data-mobile-route="leads"><span>◇</span><strong>Заявки</strong><small>Воронка обращений</small></button><button class="card mobile-module-link" data-mobile-route="designers"><span>✦</span><strong>Дизайнеры</strong><small>Партнёрская CRM</small></button><button class="card mobile-module-link" data-mobile-route="masters"><span>◎</span><strong>Мастера</strong><small>Команда и занятость</small></button></div><div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
+    $('#app').innerHTML = `${pageHeader('ADMA · ПРОФИЛЬ', 'Ещё', 'Разделы приложения и настройки доступа')}<div class="mobile-module-links"><button class="card mobile-module-link" data-mobile-route="leads"><span>◇</span><strong>Заявки</strong><small>Воронка обращений</small></button><button class="card mobile-module-link" data-mobile-route="designers"><span>✦</span><strong>Дизайнеры</strong><small>Партнёрская CRM</small></button><button class="card mobile-module-link" data-mobile-route="masters"><span>◎</span><strong>Мастера</strong><small>Команда и занятость</small></button><button class="card mobile-module-link" data-mobile-route="knowledge"><span>▤</span><strong>База знаний</strong><small>Техкарты и косяки</small></button></div><div class="card"><strong>Облачная синхронизация включена</strong><p class="muted">Объекты, расходы и чеки хранятся в защищённом облаке Supabase и доступны на ваших устройствах.</p></div>
       <div class="card"><small class="muted">Ваш доступ</small><strong style="display:block;margin-top:6px">${roleLabel(role)}</strong>${name ? `<div class="muted" style="margin-top:4px">${esc(name)}</div>` : ''}</div>
       ${role === 'owner' ? '<div class="card"><strong>Команда</strong><p class="muted">Новые сотрудники сначала открывают Mini App через @Admafinance_bot. После этого они появятся здесь и будут ждать подтверждения.</p><button id="teamAccess" class="btn primary" style="width:100%">Команда и доступ</button></div>' : ''}
       <div class="card"><strong>Вход в браузере</strong><p class="muted">${currentUser?.web_login ? 'Ваш логин: ' + esc(currentUser.web_login) : 'Настройте логин и пароль для входа без Telegram.'}</p><button id="webCredentials" class="btn secondary">${currentUser?.web_login ? 'Изменить пароль' : 'Настроить вход'}</button>${!initData ? '<button id="webLogout" class="btn danger" style="margin-left:8px">Выйти</button>' : ''}</div>
@@ -1799,7 +1842,7 @@
       state.projects = (cloud.projects || []).map(mapProject);
       state.expenses = (cloud.expenses || []).map(mapExpense);
       state.stages = (cloud.stages || []).map(mapStage);
-      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud(),loadLeadsCloud()]);
+      await Promise.all([loadFinanceCloud(),loadMastersCloud(),loadProjectOperationsCloud(),loadDesignersCloud(),loadLeadsCloud(),loadKnowledgeCloud()]);
       state.project = null;
       // Web accounts never auto-import another user's local cache.
       save();
