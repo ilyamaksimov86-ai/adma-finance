@@ -236,7 +236,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
         assert.equal(projects[0].contract_amount,value===''?null:Number(value));
         await page.reload();await page.locator('[data-contract-amount]').waitFor();
         const display=await page.locator('[data-contract-amount]').innerText();
-        assert.equal(display.replace(/\\s/g,''),value===''?'Неуказана':value+'₽');
+        assert.equal(display.replace(/\s/g,''),value===''?'Неуказана':value+'₽');
         assert.equal(await page.locator('#app').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
       }
     }
