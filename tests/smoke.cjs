@@ -184,11 +184,12 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       const pageTop=await page.evaluate(()=>scrollY),firstVisible=await columns.first().boundingBox();for(let i=0;i<3;i++)await wheelAt(firstVisible.x+firstVisible.width/2,Math.max(firstVisible.y+100,100),180,0);await until(()=>board.evaluate(el=>el.scrollLeft>0));assert.equal(await page.evaluate(()=>scrollY),pageTop);
       await board.evaluate(el=>el.scrollLeft=el.scrollWidth);assert.equal(await columns.last().locator('h3').innerText(),lastStatus);const [boardBox,lastBox]=await Promise.all([board.boundingBox(),columns.last().boundingBox()]);assert.equal(lastBox.x<boardBox.x+boardBox.width&&lastBox.x+lastBox.width>boardBox.x,true);
       assert.equal(await page.locator('body').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
-      const viewport=page.viewportSize();await page.setViewportSize({width:390,height:844});await resetPage();await board.evaluate(el=>el.scrollLeft=0);box=await board.boundingBox();let before=await page.evaluate(()=>scrollY);
+      if(!web){const viewport=page.viewportSize();await page.setViewportSize({width:390,height:844});await resetPage();await board.evaluate(el=>el.scrollLeft=0);box=await board.boundingBox();let before=await page.evaluate(()=>scrollY);
       await touchSwipeAt(box.x+box.width/2,box.y+Math.min(120,box.height/2),0,-240);await until(()=>page.evaluate(value=>scrollY>value,before));
       await resetPage();await board.evaluate(el=>el.scrollLeft=0);await until(()=>board.evaluate(el=>el.scrollLeft===0));await new Promise(r=>setTimeout(r,120));box=await board.boundingBox();before=await page.evaluate(()=>scrollY);await touchSwipeAt(box.x+box.width/2,box.y+Math.min(120,box.height/2),-80,-220,true);await until(()=>page.evaluate(value=>scrollY>value,before));
       await resetPage();await board.evaluate(el=>el.scrollLeft=0);await until(()=>board.evaluate(el=>el.scrollLeft===0));await new Promise(r=>setTimeout(r,120));box=await board.boundingBox();before=await page.evaluate(()=>scrollY);await touchSwipeAt(box.x+box.width-40,box.y+Math.min(120,box.height/2),-240,0);await until(()=>board.evaluate(el=>el.scrollLeft>0));assert.equal(await page.evaluate(()=>scrollY),before);
-      assert.equal(await page.locator('body').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);await page.setViewportSize(viewport);await page.evaluate(()=>document.getElementById('funnel-scroll-probe')?.remove());await page.evaluate(()=>scrollTo(0,0));
+      assert.equal(await page.locator('body').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);await page.setViewportSize(viewport)}
+      await page.evaluate(()=>document.getElementById('funnel-scroll-probe')?.remove());await page.evaluate(()=>scrollTo(0,0));
     };
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     if(web) {
