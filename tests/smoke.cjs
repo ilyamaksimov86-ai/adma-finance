@@ -165,8 +165,8 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
     const touchSwipeAt = async (x,y,deltaX,deltaY) => {
       const cdp=await page.context().newCDPSession(page);await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
       await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
-      for(let i=1;i<=5;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+deltaX*i/5,y:y+deltaY*i/5}]});
-      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});await cdp.detach();
+      for(let i=1;i<=5;i++){await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+deltaX*i/5,y:y+deltaY*i/5}]});await new Promise(r=>setTimeout(r,24))}
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await new Promise(r=>setTimeout(r,120));await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});await cdp.detach();
     };
     const assertNativeFunnelScroll = async (selector,lastStatus) => {
       const board=page.locator(selector),columns=board.locator('.designer-column');
