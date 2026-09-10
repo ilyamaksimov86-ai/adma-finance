@@ -169,7 +169,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await new Promise(r=>setTimeout(r,120));await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});await cdp.detach();
     };
     const assertNativeFunnelScroll = async (selector,lastStatus) => {
-      const board=page.locator(selector),columns=board.locator('.designer-column');
+      const board=page.locator(selector),columns=board.locator('.designer-column'),originalScrollLeft=await board.evaluate(el=>el.scrollLeft);
       await board.evaluate(el=>{let probe=document.getElementById('funnel-scroll-probe');if(!probe){probe=document.createElement('div');probe.id='funnel-scroll-probe';probe.style.height='1400px';el.parentElement.append(probe)}el.scrollIntoView({block:'start'})});
       await board.evaluate(el=>el.scrollLeft=0);
       const assertVerticalWheel=async(x,y)=>{const before=await page.evaluate(()=>scrollY);for(let i=0;i<3;i++)await wheelAt(x,y,0,160);await until(()=>page.evaluate(value=>scrollY>value,before))};
@@ -189,7 +189,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       if(selector==='.designer-funnel'){await resetPage();await board.evaluate(el=>el.scrollLeft=0);await until(()=>board.evaluate(el=>el.scrollLeft===0));await new Promise(r=>setTimeout(r,120));box=await board.boundingBox();before=await page.evaluate(()=>scrollY);await touchSwipeAt(box.x+box.width/2,box.y+Math.min(120,box.height/2),-80,-220,true);await until(()=>page.evaluate(value=>scrollY>value,before))}
       else{await resetPage();await board.evaluate(el=>el.scrollLeft=0);await until(()=>board.evaluate(el=>el.scrollLeft===0));await new Promise(r=>setTimeout(r,120));box=await board.boundingBox();before=await page.evaluate(()=>scrollY);await touchSwipeAt(box.x+box.width-40,box.y+Math.min(120,box.height/2),-240,0);await until(()=>board.evaluate(el=>el.scrollLeft>0));assert.equal(await page.evaluate(()=>scrollY),before)}
       assert.equal(await page.locator('body').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);await page.setViewportSize(viewport)}
-      await page.evaluate(()=>document.getElementById('funnel-scroll-probe')?.remove());await page.evaluate(()=>scrollTo(0,0));
+      await board.evaluate((el,value)=>el.scrollLeft=value,originalScrollLeft);await page.evaluate(()=>document.getElementById('funnel-scroll-probe')?.remove());await page.evaluate(()=>scrollTo(0,0));
     };
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     if(web) {
