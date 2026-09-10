@@ -173,7 +173,8 @@ const { chromium } = require(require.resolve('playwright', { paths: [process.env
       await board.evaluate(el=>{let probe=document.getElementById('funnel-scroll-probe');if(!probe){probe=document.createElement('div');probe.id='funnel-scroll-probe';probe.style.height='1400px';el.parentElement.append(probe)}el.scrollIntoView({block:'start'})});
       await board.evaluate(el=>el.scrollLeft=0);
       const assertVerticalWheel=async(x,y)=>{const before=await page.evaluate(()=>scrollY);for(let i=0;i<3;i++)await wheelAt(x,y,0,160);await until(()=>page.evaluate(value=>scrollY>value,before))};
-      const resetPage=async()=>{await board.evaluate(el=>el.scrollIntoView({block:'start'}));await new Promise(r=>setTimeout(r,120))};
+      const waitForPageScrollToSettle=async()=>{let last=await page.evaluate(()=>scrollY),stable=0;for(let i=0;i<20;i++){await new Promise(r=>setTimeout(r,50));const current=await page.evaluate(()=>scrollY);if(current===last){if(++stable===3)return}else stable=0;last=current}throw Error('Page scroll did not settle')};
+      const resetPage=async()=>{await board.evaluate(el=>el.scrollIntoView({block:'start'}));await waitForPageScrollToSettle()};
       const empty=board.locator('.empty').first();let box=await empty.boundingBox();
       await assertVerticalWheel(box.x+box.width/2,box.y+Math.min(box.height/2,20));await resetPage();
       const first=await columns.nth(0).boundingBox(),second=await columns.nth(1).boundingBox();
