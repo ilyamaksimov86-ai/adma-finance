@@ -28,7 +28,8 @@ async function fixture({parentId='p1'}={}){
  const blobBytes=new TextEncoder().encode('file');
  const blobHash=await sha256Hex(blobBytes);
  const storageEntry={source_bucket:'receipts',source_path:'r/file.txt',source_size:blobBytes.byteLength,source_mime_type:'text/plain',source_updated_at:'2026-09-11T00:00:00.000Z',source_etag:null,source_checksum:blobHash,backup_blob_path:`blobs/sha256/${blobHash.slice(0,2)}/${blobHash}`,backup_checksum:blobHash,backed_up_at:'2026-09-11T12:00:00.000Z'};
- const draft={format_version:1,implementation_version:'backup-v1',status:'complete',project_ref:'blaacuwwvyatfiyjnsrw',backup_id:backupId,created_at:'2026-09-11T12:00:00.000Z',source_git_checkpoint:'9ddebffea4ced78aa3002f7c1fe5b2d1255fa3e0',database:{table_count:2,row_count:2,bytes:tables.reduce((n,t)=>n+t.bytes,0),tables},storage:{file_count:1,bytes:blobBytes.byteLength,objects:[storageEntry]}};
+ const databaseBytes=tables.reduce((n,t)=>n+t.bytes,0);
+ const draft={format_version:1,implementation_version:'backup-v1',status:'complete',project_ref:'blaacuwwvyatfiyjnsrw',environment:'production',backup_id:backupId,run_id:'223e4567-e89b-42d3-a456-426614174000',created_at:'2026-09-11T12:00:00.000Z',started_at:'2026-09-11T12:00:00.000Z',completed_at:'2026-09-11T12:00:01.000Z',source_git_checkpoint:'9ddebffea4ced78aa3002f7c1fe5b2d1255fa3e0',spec_checkpoint:'backup-v1-design-2026-09-11',database:{table_count:2,row_count:2,bytes:databaseBytes,tables},storage:{file_count:1,bytes:blobBytes.byteLength,objects:[storageEntry]},totals:{bytes:databaseBytes+blobBytes.byteLength},duration_ms:1000,warnings:[],errors:[]};
  return {mode:'dry-run',manifest:await sealManifest(draft),databaseParts,backupBlobs:{[storageEntry.backup_blob_path]:blobBytes},liveSchema:structuredClone(tables.map(({row_count,bytes,part_count,parts,checksum,...meta})=>meta)),targetRows:{parents:[parent],children:[]},targetStorage:[]};
 }
 
@@ -111,6 +112,7 @@ test('dry run rejects schema drift and unknown columns',async()=>{
  table.bytes=table.parts[0].bytes;
  table.checksum=await sha256Hex(table.parts[0].checksum);
  unknown.manifest.database.bytes=unknown.manifest.database.tables.reduce((total,value)=>total+value.bytes,0);
+ unknown.manifest.totals.bytes=unknown.manifest.database.bytes+unknown.manifest.storage.bytes;
  delete unknown.manifest.integrity_checksum;
  unknown.manifest=await sealManifest(unknown.manifest);
  await assert.rejects(()=>buildRestoreDryRun(unknown),/unknown_snapshot_column/);

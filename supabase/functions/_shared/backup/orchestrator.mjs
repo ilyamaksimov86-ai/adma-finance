@@ -63,6 +63,7 @@ export async function runBackup(deps,options={}){
  const started=clock();
  const deadlineMs=options.deadlineMs??DEFAULT_DEADLINE_MS;
  const now=deps.now?deps.now():new Date();
+ const startedAt=now.toISOString();
  const backupId=generateBackupId(now,deps.uuid?deps.uuid():crypto.randomUUID());
  let runId=null;
  try{
@@ -80,10 +81,11 @@ export async function runBackup(deps,options={}){
   checkDeadline(clock,started,deadlineMs);
   const storage={file_count:storageEntries.length,bytes:storageEntries.reduce((sum,entry)=>sum+entry.source_size,0),objects:storageEntries};
   const durationBeforeFinalize=Math.max(0,clock()-started);
+  const completedAt=(deps.now?deps.now():new Date()).toISOString();
   const draft={
    format_version:1,implementation_version:'backup-v1',status:'complete',
    project_ref:deps.projectRef??'blaacuwwvyatfiyjnsrw',environment:'production',
-   backup_id:backupId,run_id:runId,created_at:(deps.now?deps.now():new Date()).toISOString(),
+   backup_id:backupId,run_id:runId,created_at:startedAt,started_at:startedAt,completed_at:completedAt,
    source_git_checkpoint:deps.sourceGitCheckpoint,spec_checkpoint:deps.specCheckpoint,
    database,storage,totals:{bytes:database.bytes+storage.bytes},duration_ms:durationBeforeFinalize,warnings:[],errors:[],
   };

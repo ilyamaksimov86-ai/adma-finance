@@ -16,9 +16,14 @@ function draftManifest(){
   implementation_version:'backup-v1',
   status:'complete',
   project_ref:'blaacuwwvyatfiyjnsrw',
+  environment:'production',
   backup_id:backupId,
+  run_id:'223e4567-e89b-42d3-a456-426614174000',
   created_at:'2026-09-11T12:00:00.000Z',
+  started_at:'2026-09-11T12:00:00.000Z',
+  completed_at:'2026-09-11T12:00:02.000Z',
   source_git_checkpoint:'9ddebffea4ced78aa3002f7c1fe5b2d1255fa3e0',
+  spec_checkpoint:'backup-v1-design-2026-09-11',
   database:{
    table_count:1,row_count:1,bytes:20,
    tables:[{
@@ -38,6 +43,10 @@ function draftManifest(){
     backed_up_at:'2026-09-11T12:00:01.000Z',
    }],
   },
+  totals:{bytes:32},
+  duration_ms:2000,
+  warnings:[],
+  errors:[],
  };
 }
 
@@ -54,6 +63,9 @@ test('stable JSON recursively orders object keys, preserves arrays and decimal s
  assert.equal(stableStringify(row),'{"amount":"9007199254740993.17","flags":[true,false],"meta":{"a":"x","z":1},"nullable":null}');
  assert.equal(JSON.parse(stableStringify(row)).amount,'9007199254740993.17');
  assert.throws(()=>stableStringify({amount:Number.POSITIVE_INFINITY}),/non_finite_number/);
+ const hostile=JSON.parse('{"__proto__":{"polluted":true},"a":1}');
+ assert.equal(stableStringify(hostile),'{"__proto__":{"polluted":true},"a":1}');
+ assert.equal({}.polluted,undefined);
 });
 
 test('SHA-256 is deterministic for text and bytes',async()=>{
@@ -90,6 +102,22 @@ test('manifest validation requires exact fields, counts, sizes, paths and hashes
  const wrongPath=draftManifest();
  wrongPath.database.tables[0].parts[0].path='../part.ndjson';
  await assert.rejects(async()=>validateManifest(await sealManifest(wrongPath)),/invalid_database_part_path/);
+
+ for(const [field,code] of [
+  ['environment','invalid_environment'],['run_id','invalid_run_id'],
+  ['started_at','invalid_started_at'],['completed_at','invalid_completed_at'],
+  ['spec_checkpoint','invalid_spec_checkpoint'],['totals','invalid_manifest_totals'],
+  ['duration_ms','invalid_duration_ms'],['warnings','invalid_manifest_warnings'],
+  ['errors','invalid_manifest_errors'],
+ ]){
+  const invalid=draftManifest();
+  delete invalid[field];
+  await assert.rejects(async()=>validateManifest(await sealManifest(invalid)),new RegExp(code),field);
+ }
+
+ const reversed=draftManifest();
+ reversed.completed_at='2026-09-11T11:59:59.000Z';
+ await assert.rejects(async()=>validateManifest(await sealManifest(reversed)),/invalid_manifest_time_range/);
 });
 
 test('manifest forbids recursive backup sources',async()=>{

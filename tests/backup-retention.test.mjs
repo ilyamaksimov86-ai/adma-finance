@@ -17,9 +17,12 @@ async function manifest(id,blobPaths=[]){
  }));
  return sealManifest({
   format_version:1,implementation_version:'backup-v1',status:'complete',project_ref:'blaacuwwvyatfiyjnsrw',
-  backup_id:id,created_at:'2026-08-01T02:00:00.000Z',source_git_checkpoint:'9ddebffea4ced78aa3002f7c1fe5b2d1255fa3e0',
+  environment:'production',backup_id:id,run_id:'223e4567-e89b-42d3-a456-426614174000',
+  created_at:'2026-08-01T02:00:00.000Z',started_at:'2026-08-01T02:00:00.000Z',completed_at:'2026-08-01T02:00:01.000Z',
+  source_git_checkpoint:'9ddebffea4ced78aa3002f7c1fe5b2d1255fa3e0',spec_checkpoint:'backup-v1-design-2026-09-11',
   database:{table_count:0,row_count:0,bytes:0,tables:[]},
   storage:{file_count:objects.length,bytes:objects.length,objects},
+  totals:{bytes:objects.length},duration_ms:1000,warnings:[],errors:[],
  });
 }
 

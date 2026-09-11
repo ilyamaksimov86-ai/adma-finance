@@ -1,4 +1,5 @@
 const BACKUP_ID_RE=/^\d{4}-\d{2}-\d{2}T\d{6}Z_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH_RE=/^[0-9a-f]{64}$/;
 const TABLE_RE=/^[a-z][a-z0-9_]{0,62}$/;
 const PROJECT_REF='blaacuwwvyatfiyjnsrw';
@@ -17,7 +18,7 @@ function normalizedJson(value){
  if(typeof value==='object'){
   const prototype=Object.getPrototypeOf(value);
   if(prototype!==Object.prototype&&prototype!==null)fail('unsupported_json_value');
-  const result={};
+  const result=Object.create(null);
   for(const key of Object.keys(value).sort()){
    if(value[key]===undefined)fail('unsupported_json_value');
    result[key]=normalizedJson(value[key]);
@@ -45,6 +46,11 @@ function requireHash(value,code){
 function requireSafeObjectPath(value,code){
  if(typeof value!=='string'||value.length<1||value.length>1000||value.startsWith('/')||value.includes('\\')||/[\u0000-\u001f\u007f]/.test(value)||value.split('/').some(part=>part===''||part==='.'||part==='..'))fail(code);
  return value;
+}
+
+function requireTimestamp(value,code){
+ if(typeof value!=='string'||!Number.isFinite(Date.parse(value)))fail(code);
+ return Date.parse(value);
 }
 
 function sum(items,field){return items.reduce((total,item)=>total+item[field],0);}
@@ -102,9 +108,18 @@ export async function validateManifest(manifest){
  if(manifest.implementation_version!=='backup-v1')fail('invalid_implementation_version');
  if(manifest.status!=='complete')fail('invalid_manifest_status');
  if(manifest.project_ref!==PROJECT_REF)fail('invalid_project_ref');
+ if(manifest.environment!=='production')fail('invalid_environment');
  const backupId=assertBackupId(manifest.backup_id);
- if(typeof manifest.created_at!=='string'||!Number.isFinite(Date.parse(manifest.created_at)))fail('invalid_created_at');
+ if(typeof manifest.run_id!=='string'||!UUID_RE.test(manifest.run_id))fail('invalid_run_id');
+ requireTimestamp(manifest.created_at,'invalid_created_at');
+ const startedAt=requireTimestamp(manifest.started_at,'invalid_started_at');
+ const completedAt=requireTimestamp(manifest.completed_at,'invalid_completed_at');
+ if(completedAt<startedAt)fail('invalid_manifest_time_range');
  if(typeof manifest.source_git_checkpoint!=='string'||!/^[0-9a-f]{40}$/.test(manifest.source_git_checkpoint))fail('invalid_source_git_checkpoint');
+ if(typeof manifest.spec_checkpoint!=='string'||manifest.spec_checkpoint.length<1||manifest.spec_checkpoint.length>200)fail('invalid_spec_checkpoint');
+ requireInteger(manifest.duration_ms,'invalid_duration_ms');
+ if(!Array.isArray(manifest.warnings))fail('invalid_manifest_warnings');
+ if(!Array.isArray(manifest.errors)||manifest.errors.length!==0)fail('invalid_manifest_errors');
 
  const database=requireObject(manifest.database,'invalid_database_manifest');
  if(!Array.isArray(database.tables))fail('invalid_database_tables');
@@ -162,6 +177,9 @@ export async function validateManifest(manifest){
   if(object.source_updated_at!==null&&object.source_updated_at!==undefined&&(typeof object.source_updated_at!=='string'||!Number.isFinite(Date.parse(object.source_updated_at))))fail('invalid_source_updated_at');
  }
  if(sum(storage.objects,'source_size')!==storage.bytes)fail('storage_bytes_mismatch');
+ const totals=requireObject(manifest.totals,'invalid_manifest_totals');
+ requireInteger(totals.bytes,'invalid_manifest_total_bytes');
+ if(Object.keys(totals).length!==1||totals.bytes!==database.bytes+storage.bytes)fail('manifest_total_bytes_mismatch');
  return true;
 }
 
