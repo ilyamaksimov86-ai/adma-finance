@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {sealManifest,sha256Hex,stableStringify} from '../supabase/functions/_shared/backup/core.mjs';
 import {topologicalTableOrder,classifyRows,classifyStorage,buildRestoreDryRun} from '../supabase/functions/_shared/backup/restore.mjs';
+import {spawnSync} from 'node:child_process';
+import {buildRequest,parseArgs,selectAggregateOutput} from '../scripts/backup-restore.mjs';
 
 const backupId='2026-09-11T120000Z_123e4567-e89b-42d3-a456-426614174000';
 
@@ -117,4 +119,25 @@ test('dry run rejects schema drift and unknown columns',async()=>{
 test('backup v1 never creates a destructive restore plan',async()=>{
  const input=await fixture();
  assert.throws(()=>buildRestoreDryRun({...input,mode:'apply'}),/dry_run_only/);
+});
+
+test('restore CLI defaults to dry-run and exposes aggregate output only',()=>{
+ const id=backupId;
+ assert.deepEqual(parseArgs(['--backup-id',id]),{backupId:id});
+ const request=buildRequest({backupId:id,url:'https://project.supabase.co',secret:'do-not-print'});
+ assert.equal(JSON.parse(request.init.body).action,'restore_dry_run');
+ assert.equal(JSON.parse(request.init.body).backup_id,id);
+ const output=selectAggregateOutput({mode:'dry-run',backup_id:id,table_order:['projects'],database:{insert:1,existing_identical:2,conflict:0,missing_dependency:0,total:3,tables:{projects:{insert:1}}},storage:{insert:1,existing_identical:0,conflict:0,total:1},validated_parts:2,validated_blobs:1,manifest:{private:'row'},rows:[{secret:'x'}]});
+ assert.deepEqual(Object.keys(output).sort(),['backup_id','database','mode','storage','table_order','validated_blobs','validated_parts']);
+ assert.equal(JSON.stringify(output).includes('private'),false);
+ assert.equal(JSON.stringify(output).includes('secret'),false);
+});
+
+test('restore CLI rejects every destructive flag before environment or network access',()=>{
+ for(const flag of ['--apply','--restore','--target-production','--allow-destructive']){
+  const result=spawnSync(process.execPath,[new URL('../scripts/backup-restore.mjs',import.meta.url).pathname,flag,'--backup-id',backupId],{encoding:'utf8',env:{PATH:process.env.PATH}});
+  assert.notEqual(result.status,0,flag);
+  assert.match(result.stderr,/dry_run_only/,flag);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`,/SUPABASE_URL|ADMA_BACKUP_SECRET/,flag);
+ }
 });

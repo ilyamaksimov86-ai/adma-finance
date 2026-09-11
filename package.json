@@ -8,7 +8,8 @@
     "architecture:check": "node scripts/architecture-check.mjs",
     "contracts:check": "node scripts/contract-check.mjs",
     "check": "npm run frontend:check && node --check app.js && node --check auth.js && node --check cloud.js && node --check tests/smoke.cjs && npm run architecture:check && npm run contracts:check",
-    "test": "node --test tests/*.test.mjs tests/pdf.test.cjs && node tests/smoke.cjs && AUTH_MODE=web node tests/smoke.cjs"
+    "test": "node --test tests/*.test.mjs tests/pdf.test.cjs && node tests/smoke.cjs && AUTH_MODE=web node tests/smoke.cjs",
+    "test:backup": "node --test tests/backup-*.test.mjs tests/storage-cleanup.test.mjs"
   },
   "devDependencies": {
     "playwright": "1.62.1",
