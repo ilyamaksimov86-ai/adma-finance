@@ -29,7 +29,8 @@ create table public.backup_runs (
   check (
     (status = 'running' and completed_at is null)
     or (status in ('success','failed') and completed_at is not null)
-  )
+  ),
+  check (status <> 'success' or (checksum is not null and duration_ms is not null))
 );
 
 create unique index backup_runs_one_running_uidx
@@ -112,6 +113,12 @@ create table private.backup_config (
 );
 insert into private.backup_config (singleton) values (true);
 
+create table private.backup_maintenance_state (
+  singleton boolean primary key default true check (singleton),
+  retention_started_at timestamptz
+);
+insert into private.backup_maintenance_state (singleton) values (true);
+
 revoke all on all tables in schema private from public, anon, authenticated;
 grant select, insert, update, delete on all tables in schema private to service_role;
 
@@ -140,6 +147,19 @@ begin
          error = 'stale_running_backup'
    where status = 'running'
      and started_at < pg_catalog.now() - interval '15 minutes';
+
+  update private.backup_maintenance_state
+     set retention_started_at = null
+   where singleton
+     and retention_started_at < pg_catalog.now() - interval '15 minutes';
+
+  if exists (
+    select 1 from private.backup_maintenance_state
+     where singleton and retention_started_at is not null
+  ) then
+    return query select 'maintenance_busy'::text,null::uuid,p_backup_id;
+    return;
+  end if;
 
   if exists (select 1 from public.backup_runs where status = 'running') then
     return query
@@ -170,6 +190,57 @@ begin
   returning id into v_run_id;
 
   return query select 'started'::text,v_run_id,p_backup_id;
+end;
+$$;
+
+create or replace function public.begin_backup_retention()
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare v_changed integer;
+begin
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('adma-backup-v1-claim'));
+
+  update public.backup_runs
+     set status = 'failed',
+         completed_at = pg_catalog.now(),
+         duration_ms = greatest(0,(extract(epoch from (pg_catalog.now()-started_at))*1000)::bigint),
+         error = 'stale_running_backup'
+   where status = 'running'
+     and started_at < pg_catalog.now() - interval '15 minutes';
+
+  update private.backup_maintenance_state
+     set retention_started_at = null
+   where singleton
+     and retention_started_at < pg_catalog.now() - interval '15 minutes';
+
+  if exists (select 1 from public.backup_runs where status = 'running') then
+    return false;
+  end if;
+
+  update private.backup_maintenance_state
+     set retention_started_at = pg_catalog.now()
+   where singleton and retention_started_at is null;
+  get diagnostics v_changed = row_count;
+  return v_changed = 1;
+end;
+$$;
+
+create or replace function public.end_backup_retention()
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare v_changed integer;
+begin
+  update private.backup_maintenance_state
+     set retention_started_at = null
+   where singleton and retention_started_at is not null;
+  get diagnostics v_changed = row_count;
+  return v_changed = 1;
 end;
 $$;
 
@@ -212,7 +283,8 @@ set search_path = ''
 as $$
 declare v_changed integer;
 begin
-  if p_table_count < 0 or p_row_count < 0 or p_file_count < 0
+  if p_checksum is null or p_duration_ms is null
+     or p_table_count < 0 or p_row_count < 0 or p_file_count < 0
      or p_database_bytes < 0 or p_storage_bytes < 0 or p_duration_ms < 0
      or p_checksum !~ '^[0-9a-f]{64}$'
      or jsonb_typeof(p_warnings) <> 'array' or jsonb_typeof(p_metadata) <> 'object' then
@@ -422,6 +494,18 @@ begin
       (p_run_id,r.table_name,v_columns,v_numeric_columns,v_primary_key,v_foreign_keys,
        v_row_count,v_bytes,v_part_count,v_checksum);
   end loop;
+
+  if exists (
+    (select table_name from private.backup_table_registry where included
+     except
+     select table_name from private.backup_snapshot_tables where run_id = p_run_id)
+    union all
+    (select table_name from private.backup_snapshot_tables where run_id = p_run_id
+     except
+     select table_name from private.backup_table_registry where included)
+  ) then
+    raise exception 'snapshot table set mismatch';
+  end if;
 
   return (
     select jsonb_build_object(
@@ -749,6 +833,10 @@ $$;
 
 revoke all on function public.claim_backup_run(text,boolean) from public, anon, authenticated;
 grant execute on function public.claim_backup_run(text,boolean) to service_role;
+revoke all on function public.begin_backup_retention() from public, anon, authenticated;
+grant execute on function public.begin_backup_retention() to service_role;
+revoke all on function public.end_backup_retention() from public, anon, authenticated;
+grant execute on function public.end_backup_retention() to service_role;
 revoke all on function public.fail_backup_run(uuid,text) from public, anon, authenticated;
 grant execute on function public.fail_backup_run(uuid,text) to service_role;
 revoke all on function public.finish_backup_run(uuid,integer,bigint,bigint,bigint,bigint,text,bigint,jsonb,jsonb) from public, anon, authenticated;

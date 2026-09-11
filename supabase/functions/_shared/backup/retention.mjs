@@ -1,4 +1,4 @@
-import {assertBackupId,validateManifest} from './core.mjs';
+import {assertBackupId,assertManifestRunBinding,validateManifest} from './core.mjs';
 
 const SEVEN_DAYS_MS=7*24*60*60*1000;
 const BLOB_RE=/^blobs\/sha256\/([0-9a-f]{2})\/([0-9a-f]{64})$/;
@@ -6,7 +6,7 @@ const BLOB_RE=/^blobs\/sha256\/([0-9a-f]{2})\/([0-9a-f]{64})$/;
 function manifestFor(manifests,id){return manifests instanceof Map?manifests.get(id):manifests?.[id];}
 function oldEnough(value,nowMs){const time=new Date(value).getTime();return Number.isFinite(time)&&nowMs-time>=SEVEN_DAYS_MS;}
 
-export async function planRetention(successes,manifests,blobs,now=new Date(),target=10){
+export async function planRetention(successes,manifests,blobs,now=new Date(),target=10,expectedTables){
  if(!Array.isArray(successes)||!Array.isArray(blobs))throw new Error('invalid_retention_input');
  if(!Number.isSafeInteger(target)||target<1)throw new Error('invalid_retention_target');
  const nowMs=(now instanceof Date?now:new Date(now)).getTime();
@@ -41,7 +41,8 @@ export async function planRetention(successes,manifests,blobs,now=new Date(),tar
    const manifest=manifestFor(manifests,run.backup_id);
    try{
     if(!manifest||manifest.backup_id!==run.backup_id)throw new Error('missing_manifest');
-    await validateManifest(manifest);
+    await validateManifest(manifest,expectedTables);
+    assertManifestRunBinding(manifest,run,`database/${run.backup_id}/manifest.json`);
     for(const entry of manifest.storage.objects)referenced.add(entry.backup_blob_path);
    }catch{
     canDeleteBlobs=false;

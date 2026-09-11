@@ -151,6 +151,8 @@ Before reuse, an existing blob is downloaded and its checksum is verified. A cha
 
 Every storage manifest entry contains `source_bucket`, `source_path`, `source_size`, `source_mime_type`, `source_updated_at`, source ETag when available, `source_checksum`, `backup_blob_path`, `backup_checksum`, and `backed_up_at`. The backup survives deletion of the source object because the manifest references a physical backup blob, not only the original path.
 
+Storage cannot provide one transactionally frozen view across objects. The worker therefore captures a deterministic inventory before copying each source bucket and repeats it after the copy. The run fails on any observable path, size, MIME type, update timestamp, or ETag difference. Pagination fails closed on a stalled page or the explicit page ceiling; it never treats a ceiling as end-of-list.
+
 ## Atomic completion and failure handling
 
 A backup identifier is an UTC timestamp plus a random UUID suffix, for example `2026-09-11T120000Z_<uuid>`. Only a strict generated format is accepted in paths.
@@ -189,6 +191,8 @@ The Cron job `backup-adma-daily-check` runs at `43 2 * * *` UTC. This avoids the
 
 An authenticated maintenance request may set `force: true`. It bypasses only the 72-hour age check; it does not bypass concurrency, validation, privacy, or integrity checks.
 
+Backup claims and retention use the same advisory-lock-protected database maintenance lease. Retention refuses to start while a run is active, and claims return `maintenance_busy` while retention is active, including forced claims. Both stale running backups and stale retention leases are recovered after 15 minutes.
+
 ## Retention and incomplete cleanup
 
 The target is the ten newest successful snapshots. Retention never deletes the newest successful snapshot.
@@ -196,6 +200,8 @@ The target is the ten newest successful snapshots. Retention never deletes the n
 For snapshots beyond ten, the worker deletes their database part objects and manifest only after confirming the retained set. Before deleting a content-addressed blob, it loads and validates every retained manifest and constructs the complete referenced-blob set. If any retained manifest is missing or invalid, blob deletion stops safely and records a warning.
 
 Failed/incomplete snapshot objects older than seven days may be removed, while their `backup_runs` metadata remains for diagnosis. Orphan blobs must be older than seven days and unreferenced by every validated retained manifest before deletion. This safety window also protects against an upload race.
+
+The maintenance lease removes the remaining content-addressed-blob race: a concurrent backup cannot begin between retention reference discovery and deletion. Every retained manifest must also match its `backup_runs` id, backup id, checksum, and recorded manifest path; any mismatch disables blob deletion.
 
 At the audited size, ten database snapshots are expected to consume under 1 MB plus manifests. Existing source file blobs add about 0.24 MB. Even the conservative case where all current source bytes change on every retained snapshot remains only a few megabytes, far below the Free-plan 1 GB Storage quota. Actual measurements after the first backup replace these estimates in the rollout report.
 
@@ -219,6 +225,8 @@ Dry-run:
 10. classifies Storage paths as insert, existing-identical, or conflict;
 11. stores and returns only aggregate technical results;
 12. performs no insert, update, delete, truncate, drop, upload, move, or remove operation.
+
+Validation is capped at a 10 MiB manifest, 128 MiB total backup bytes, 500,000 snapshot rows, 20,000 database parts, and 10,000 Storage objects. Database and Storage calls share a 135-second operation deadline, including hung requests. Live-table pagination is bounded by the row envelope and rejects a stalled cursor. These limits keep corrupted or unexpectedly large backups from exhausting the Edge worker; exceeding them is a fail-closed signal to design Backup V2 scaling rather than silently truncate V1.
 
 Any `--apply`, `--restore`, `--target-production`, or `--allow-destructive` request is rejected as unsupported in Backup V1. This is stronger than an opt-in destructive mode and ensures the shipped tool cannot modify production business data.
 

@@ -54,6 +54,11 @@ test('pagination continues beyond one thousand objects',async()=>{
  assert.equal(listed.at(-1).path,'file-1204');
 });
 
+test('pagination fails closed when a full final page reaches the configured limit',async()=>{
+ const objects=Array.from({length:1000},(_,i)=>({name:`file-${String(i).padStart(4,'0')}`,size:1,updated_at:'2026-09-11T00:00:00Z'}));
+ await assert.rejects(()=>listAllSourceObjects(fakePagedStorage(objects),'receipts',{maxPages:1}),/storage_pagination_limit/);
+});
+
 test('empty buckets and recursive folders produce stable relative paths',async()=>{
  assert.deepEqual(await listAllSourceObjects(storageFixture(),'receipts'),[]);
  const adapter=storageFixture({
@@ -122,4 +127,18 @@ test('backup maps metadata and excludes exports and backup recursion',async()=>{
  assert.equal(adapter.calls.list.some(call=>call.bucket==='exports'||call.bucket==='adma-backups'),false);
  await assert.rejects(()=>listAllSourceObjects(adapter,'exports'),/invalid_source_bucket/);
  await assert.rejects(()=>listAllSourceObjects(adapter,'adma-backups'),/invalid_source_bucket/);
+});
+
+test('backup fails when source inventory changes while objects are copied',async()=>{
+ const adapter=storageFixture({'receipts/a.txt':'a'});
+ const originalList=adapter.list.bind(adapter);
+ let receiptRootListings=0;
+ adapter.list=async(bucket,options)=>{
+  if(bucket==='receipts'&&options.prefix===''){
+   receiptRootListings+=1;
+   if(receiptRootListings===2)adapter.files.set('receipts/b.txt',new TextEncoder().encode('b'));
+  }
+  return originalList(bucket,options);
+ };
+ await assert.rejects(()=>backupStorage(adapter,new Date('2026-09-11T12:00:00.000Z')),/storage_inventory_changed/);
 });

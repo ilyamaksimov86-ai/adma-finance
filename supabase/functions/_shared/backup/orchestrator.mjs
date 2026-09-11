@@ -1,4 +1,4 @@
-import {assertBackupId,generateBackupId,safeBackupError,sealManifest,sha256Hex,stableStringify,validateManifest} from './core.mjs';
+import {assertBackupId,assertManifestRunBinding,generateBackupId,safeBackupError,sealManifest,sha256Hex,stableStringify,validateManifest} from './core.mjs';
 import {backupStorage as copyStorage,validateStorageEntries as verifyStorage} from './storage.mjs';
 import {planRetention} from './retention.mjs';
 import {buildRestoreDryRun} from './restore.mjs';
@@ -6,6 +6,7 @@ import {buildRestoreDryRun} from './restore.mjs';
 const BACKUP_BUCKET='adma-backups';
 const DEFAULT_DEADLINE_MS=135000;
 const RPC_PAGE_SIZE=100;
+const RESTORE_LIMITS=Object.freeze({manifestBytes:10*1024*1024,totalBytes:128*1024*1024,rows:500000,parts:20000,objects:10000});
 
 function fail(code){throw new Error(code);}
 function byteLength(value){return new TextEncoder().encode(value).byteLength;}
@@ -14,7 +15,39 @@ function unwrap(value){if(value&&typeof value==='object'&&'error' in value){if(v
 async function toBytes(value){const data=unwrap(value);if(data instanceof Uint8Array)return data;if(data instanceof ArrayBuffer)return new Uint8Array(data);if(ArrayBuffer.isView(data))return new Uint8Array(data.buffer,data.byteOffset,data.byteLength);if(data&&typeof data.arrayBuffer==='function')return new Uint8Array(await data.arrayBuffer());fail('invalid_storage_bytes');}
 function isMissing(error){return Number(error?.status??error?.statusCode)===404||error?.code==='not_found'||/not found|does not exist/i.test(String(error?.message??''));}
 
+export {assertManifestRunBinding};
+
+export function assertRestoreBounds(manifest,limits=RESTORE_LIMITS){
+ const partCount=manifest?.database?.tables?.reduce((total,table)=>total+(Array.isArray(table?.parts)?table.parts.length:0),0);
+ if(!Number.isSafeInteger(manifest?.database?.row_count)||manifest.database.row_count>limits.rows)fail('restore_row_limit');
+ if(!Number.isSafeInteger(partCount)||partCount>limits.parts)fail('restore_part_limit');
+ if(!Number.isSafeInteger(manifest?.storage?.file_count)||manifest.storage.file_count>limits.objects)fail('restore_object_limit');
+ if(!Number.isSafeInteger(manifest?.totals?.bytes)||manifest.totals.bytes>limits.totalBytes)fail('restore_byte_limit');
+ return true;
+}
+
 function checkDeadline(clock,started,deadlineMs){if(clock()-started>=deadlineMs)fail('backup_deadline_exceeded');}
+
+async function withinDeadline(operation,clock,started,deadlineMs){
+ const remaining=deadlineMs-(clock()-started);
+ if(remaining<=0)fail('backup_deadline_exceeded');
+ let timer;
+ try{
+  return await Promise.race([
+   Promise.resolve().then(operation),
+   new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('backup_deadline_exceeded')),remaining);}),
+  ]);
+ }finally{clearTimeout(timer);}
+}
+
+function boundedAdapter(adapter,clock,started,deadlineMs,invalidCode){
+ if(!adapter)fail(invalidCode);
+ return new Proxy(adapter,{get(target,property,receiver){
+  const value=Reflect.get(target,property,receiver);
+  if(typeof value!=='function')return value;
+  return (...args)=>withinDeadline(()=>value.apply(target,args),clock,started,deadlineMs);
+ }});
+}
 
 async function uploadAndVerifyDatabase(deps,runId,backupId,clock,started,deadlineMs){
  const summary=await deps.db.prepare(runId);
@@ -69,15 +102,16 @@ export async function runBackup(deps,options={}){
  try{
   const claim=await deps.db.claim(backupId,options.force===true);
   runId=claim?.run_id??null;
-  if(claim?.result==='skipped_recent'||claim?.result==='already_running')return {status:claim.result,code:claim.result,run_id:runId,backup_id:claim.backup_id??backupId};
+  if(['skipped_recent','already_running','maintenance_busy'].includes(claim?.result))return {status:claim.result,code:claim.result,run_id:runId,backup_id:claim.backup_id??backupId};
   if(claim?.result!=='started'||!runId)fail('backup_claim_failed');
   checkDeadline(clock,started,deadlineMs);
+  const storageAdapter=boundedAdapter(deps.storage,clock,started,deadlineMs,'invalid_storage_adapter');
 
-  const database=await uploadAndVerifyDatabase(deps,runId,backupId,clock,started,deadlineMs);
+  const database=await uploadAndVerifyDatabase({...deps,storage:storageAdapter},runId,backupId,clock,started,deadlineMs);
   checkDeadline(clock,started,deadlineMs);
-  const storageEntries=await (deps.backupStorage??copyStorage)(deps.storage,now);
+  const storageEntries=await (deps.backupStorage??copyStorage)(storageAdapter,now);
   checkDeadline(clock,started,deadlineMs);
-  await (deps.validateStorageEntries??verifyStorage)(deps.storage,storageEntries);
+  await (deps.validateStorageEntries??verifyStorage)(storageAdapter,storageEntries);
   checkDeadline(clock,started,deadlineMs);
   const storage={file_count:storageEntries.length,bytes:storageEntries.reduce((sum,entry)=>sum+entry.source_size,0),objects:storageEntries};
   const durationBeforeFinalize=Math.max(0,clock()-started);
@@ -90,20 +124,20 @@ export async function runBackup(deps,options={}){
    database,storage,totals:{bytes:database.bytes+storage.bytes},duration_ms:durationBeforeFinalize,warnings:[],errors:[],
   };
   const manifest=await sealManifest(draft);
-  await validateManifest(manifest);
+  await validateManifest(manifest,deps.expectedTables);
   const manifestPath=`database/${backupId}/manifest.json`;
   const manifestText=stableStringify(manifest);
-  unwrap(await deps.storage.upload(BACKUP_BUCKET,manifestPath,new TextEncoder().encode(manifestText),{upsert:false,contentType:'application/json'}));
-  const verifiedText=new TextDecoder('utf-8',{fatal:true}).decode(await toBytes(await deps.storage.download(BACKUP_BUCKET,manifestPath)));
+  unwrap(await storageAdapter.upload(BACKUP_BUCKET,manifestPath,new TextEncoder().encode(manifestText),{upsert:false,contentType:'application/json'}));
+  const verifiedText=new TextDecoder('utf-8',{fatal:true}).decode(await toBytes(await storageAdapter.download(BACKUP_BUCKET,manifestPath)));
   const verified=JSON.parse(verifiedText);
-  await validateManifest(verified);
+  await validateManifest(verified,deps.expectedTables);
   if(verified.integrity_checksum!==manifest.integrity_checksum)fail('uploaded_manifest_mismatch');
   checkDeadline(clock,started,deadlineMs);
   const durationMs=Math.max(0,clock()-started);
   const finished=await deps.db.finish(runId,{table_count:database.table_count,row_count:database.row_count,file_count:storage.file_count,database_bytes:database.bytes,storage_bytes:storage.bytes,checksum:manifest.integrity_checksum,duration_ms:durationMs,warnings:[],metadata:{manifest_path:manifestPath,source_git_checkpoint:deps.sourceGitCheckpoint,spec_checkpoint:deps.specCheckpoint}});
   if(finished!==true)fail('backup_finish_rejected');
   try{await deps.db.clear(runId);}catch{deps.logger?.error?.({event:'backup_staging_cleanup_failed',run_id:runId,backup_id:backupId});}
-  try{await deps.retention?.();}catch{deps.logger?.error?.({event:'backup_retention_failed',run_id:runId,backup_id:backupId});}
+  try{checkDeadline(clock,started,deadlineMs);await deps.retention?.({db:deps.db,storage:storageAdapter});}catch{deps.logger?.error?.({event:'backup_retention_failed',run_id:runId,backup_id:backupId});}
   deps.logger?.info?.({event:'backup_success',run_id:runId,backup_id:backupId,table_count:database.table_count,row_count:database.row_count,file_count:storage.file_count,total_bytes:database.bytes+storage.bytes,duration_ms:durationMs});
   return {status:'success',code:'backup_complete',run_id:runId,backup_id:backupId,table_count:database.table_count,row_count:database.row_count,file_count:storage.file_count,database_bytes:database.bytes,storage_bytes:storage.bytes,total_bytes:database.bytes+storage.bytes,duration_ms:durationMs,checksum:manifest.integrity_checksum};
  }catch(error){
@@ -117,60 +151,97 @@ export async function runBackup(deps,options={}){
  }
 }
 
-export async function runRestoreDryRun(deps,backupId){
+export async function runRestoreDryRun(deps,backupId,options={}){
  assertBackupId(backupId);
- const run=await deps.db.findSuccessfulRun(backupId);
+ const clock=deps.clock??Date.now;
+ const started=clock();
+ const deadlineMs=options.deadlineMs??DEFAULT_DEADLINE_MS;
+ const db=boundedAdapter(deps.db,clock,started,deadlineMs,'invalid_database_adapter');
+ const storage=boundedAdapter(deps.storage,clock,started,deadlineMs,'invalid_storage_adapter');
+ const run=await db.findSuccessfulRun(backupId);
  if(!run)fail('backup_not_found');
  const manifestPath=`database/${backupId}/manifest.json`;
- const manifestBytes=await toBytes(await deps.storage.download(BACKUP_BUCKET,manifestPath));
- if(manifestBytes.byteLength>10*1024*1024)fail('manifest_too_large');
+ const manifestBytes=await toBytes(await storage.download(BACKUP_BUCKET,manifestPath));
+ if(manifestBytes.byteLength>RESTORE_LIMITS.manifestBytes)fail('manifest_too_large');
  const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(manifestBytes));
- await validateManifest(manifest);
+ await validateManifest(manifest,options.expectedTables);
+ assertManifestRunBinding(manifest,run,manifestPath);
+ assertRestoreBounds(manifest,options.limits??RESTORE_LIMITS);
  const databaseParts={};
- for(const table of manifest.database.tables)for(const part of table.parts)databaseParts[part.path]=await toBytes(await deps.storage.download(BACKUP_BUCKET,part.path));
+ for(const table of manifest.database.tables)for(const part of table.parts)databaseParts[part.path]=await toBytes(await storage.download(BACKUP_BUCKET,part.path));
  const backupBlobs={};
- for(const entry of manifest.storage.objects)backupBlobs[entry.backup_blob_path]=await toBytes(await deps.storage.download(BACKUP_BUCKET,entry.backup_blob_path));
- const liveSchema=await deps.db.readLiveSchema();
+ for(const entry of manifest.storage.objects)backupBlobs[entry.backup_blob_path]=await toBytes(await storage.download(BACKUP_BUCKET,entry.backup_blob_path));
+ const liveSchema=await db.readLiveSchema();
  const targetRows={};
+ let targetRowCount=0;
  for(const table of manifest.database.tables){
-  const rows=[];let after=null;
+  const rows=[];let after=null;let previousAfter=null;
   for(;;){
-   const page=await deps.db.readTablePage(table.table_name,after,500);
+   const page=await db.readTablePage(table.table_name,after,500);
    if(!Array.isArray(page))fail('invalid_restore_page');
-   for(const item of page)rows.push(JSON.parse(item.row_data));
+   for(const item of page){rows.push(JSON.parse(item.row_data));targetRowCount++;if(targetRowCount>RESTORE_LIMITS.rows)fail('restore_target_row_limit');}
    if(page.length<500)break;
    after=page.at(-1).primary_key;
+   const fingerprint=stableStringify(after);
+   if(fingerprint===previousAfter)fail('restore_pagination_stalled');
+   previousAfter=fingerprint;
   }
   targetRows[table.table_name]=rows;
  }
  const targetStorage=[];
  for(const entry of manifest.storage.objects){
   try{
-   const bytes=await toBytes(await deps.storage.download(entry.source_bucket,entry.source_path));
+   const bytes=await toBytes(await storage.download(entry.source_bucket,entry.source_path));
    targetStorage.push({bucket:entry.source_bucket,path:entry.source_path,size:bytes.byteLength,checksum:await sha256Hex(bytes)});
   }catch(error){if(!isMissing(error))throw error;}
  }
- const result=await buildRestoreDryRun({mode:'dry-run',manifest,databaseParts,backupBlobs,liveSchema,targetRows,targetStorage});
- await deps.db.recordRestoreDryRun?.(run.id,{backup_id:backupId,validated_at:new Date().toISOString(),database:{insert:result.database.insert,existing_identical:result.database.existing_identical,conflict:result.database.conflict,missing_dependency:result.database.missing_dependency,total:result.database.total},storage:result.storage,validated_parts:result.validated_parts,validated_blobs:result.validated_blobs});
+ const result=await buildRestoreDryRun({mode:'dry-run',manifest,expectedTables:options.expectedTables,databaseParts,backupBlobs,liveSchema,targetRows,targetStorage});
+ await db.recordRestoreDryRun?.(run.id,{backup_id:backupId,validated_at:new Date().toISOString(),database:{insert:result.database.insert,existing_identical:result.database.existing_identical,conflict:result.database.conflict,missing_dependency:result.database.missing_dependency,total:result.database.total},storage:result.storage,validated_parts:result.validated_parts,validated_blobs:result.validated_blobs});
  return result;
 }
 
 async function listBackupObjects(storage){
- const result=[];const pending=[''];
+ const result=[];const pending=[''];const visited=new Set();
  while(pending.length){
   const prefix=pending.shift();
-  for(let offset=0;;offset+=1000){
+  if(visited.has(prefix))fail('storage_folder_cycle');
+  visited.add(prefix);
+  let previousFingerprint=null;
+  for(let page=0,offset=0;page<10000;page++,offset+=1000){
    const rows=unwrap(await storage.list(BACKUP_BUCKET,{prefix,limit:1000,offset,sortBy:{column:'name',order:'asc'}}));
    if(!Array.isArray(rows))fail('invalid_backup_listing');
+   const fingerprint=rows.map(item=>`${item?.name}:${item?.isFolder===true||(item?.id==null&&item?.metadata==null)?'d':'f'}`).join('|');
+   if(rows.length===1000&&offset>0&&fingerprint===previousFingerprint)fail('storage_pagination_stalled');
+   previousFingerprint=fingerprint;
    for(const item of rows){
+    if(!item||typeof item.name!=='string'||!item.name||item.name.includes('/'))fail('invalid_backup_listing');
     const path=prefix?`${prefix}/${item.name}`:item.name;
     if(item?.isFolder===true||(item?.id==null&&item?.metadata==null))pending.push(path);
     else result.push({path,created_at:item.created_at??item.updated_at});
    }
    if(rows.length<1000)break;
+   if(page===9999)fail('storage_pagination_limit');
   }
  }
  return result.sort((a,b)=>a.path.localeCompare(b.path));
+}
+
+export async function runRetention(db,storage,now=new Date(),expectedTables){
+ const acquired=await db.beginRetention();
+ if(acquired!==true)return {skipped:true,reason:'maintenance_busy'};
+ try{
+  const runs=await db.listRuns();
+  const objects=await listBackupObjects(storage);
+  const manifests={};
+  for(const run of runs.filter(item=>item.status==='success').slice(0,10)){
+   try{manifests[run.backup_id]=JSON.parse(new TextDecoder().decode(await toBytes(await storage.download(BACKUP_BUCKET,`database/${run.backup_id}/manifest.json`))));}catch{manifests[run.backup_id]=null;}
+  }
+  const plan=await planRetention(runs,manifests,objects,now,10,expectedTables);
+  for(const paths of [plan.snapshot_paths_to_delete,plan.blob_paths_to_delete])for(let index=0;index<paths.length;index+=100)unwrap(await storage.remove(BACKUP_BUCKET,paths.slice(index,index+100)));
+  return plan;
+ }finally{
+  if(await db.endRetention()!==true)fail('retention_lease_release_failed');
+ }
 }
 
 export function createSupabaseBackupDeps(client,config={}){
@@ -192,21 +263,13 @@ export function createSupabaseBackupDeps(client,config={}){
   readLiveSchema:()=>rpc('read_backup_live_schema',{}),
   async readConfig(){const data=await rpc('read_backup_config',{});return Array.isArray(data)?data[0]:data;},
   readTablePage:(table,after,limit)=>rpc('read_backup_table_page',{p_table_name:table,p_after:after,p_limit:limit}),
-  async listRuns(){const response=await client.from('backup_runs').select('id,backup_id,status,completed_at,metadata').order('completed_at',{ascending:false});return unwrap(response);},
-  async findSuccessfulRun(backupId){const response=await client.from('backup_runs').select('id,backup_id,status,metadata').eq('backup_id',backupId).eq('status','success').maybeSingle();return unwrap(response);},
+  async listRuns(){const response=await client.from('backup_runs').select('id,backup_id,status,completed_at,checksum,metadata').order('completed_at',{ascending:false});return unwrap(response);},
+  async findSuccessfulRun(backupId){const response=await client.from('backup_runs').select('id,backup_id,status,checksum,metadata').eq('backup_id',backupId).eq('status','success').maybeSingle();return unwrap(response);},
   recordRestoreDryRun:(runId,result)=>rpc('record_backup_restore_dry_run',{p_run_id:runId,p_result:result}),
+  beginRetention:()=>rpc('begin_backup_retention',{}),
+  endRetention:()=>rpc('end_backup_retention',{}),
  };
  const deps={db,storage,sourceGitCheckpoint:config.sourceGitCheckpoint,specCheckpoint:config.specCheckpoint,projectRef:config.projectRef??'blaacuwwvyatfiyjnsrw',logger:config.logger??console};
- deps.retention=async()=>{
-  const runs=await db.listRuns();
-  const objects=await listBackupObjects(storage);
-  const manifests={};
-  for(const run of runs.filter(item=>item.status==='success').slice(0,10)){
-   try{manifests[run.backup_id]=JSON.parse(new TextDecoder().decode(await toBytes(await storage.download(BACKUP_BUCKET,`database/${run.backup_id}/manifest.json`))));}catch{manifests[run.backup_id]=null;}
-  }
-  const plan=await planRetention(runs,manifests,objects,new Date(),10);
-  for(const paths of [plan.snapshot_paths_to_delete,plan.blob_paths_to_delete])for(let index=0;index<paths.length;index+=100)unwrap(await storage.remove(BACKUP_BUCKET,paths.slice(index,index+100)));
-  return plan;
- };
+ deps.retention=({db:runtimeDb=db,storage:runtimeStorage=storage}={})=>runRetention(runtimeDb,runtimeStorage,new Date());
  return deps;
 }

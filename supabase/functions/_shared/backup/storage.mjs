@@ -62,9 +62,10 @@ function normalizedObject(bucket,prefix,item){
  };
 }
 
-export async function listAllSourceObjects(adapter,bucket){
+export async function listAllSourceObjects(adapter,bucket,{maxPages=10000}={}){
  assertSourceBucket(bucket);
  if(!adapter||typeof adapter.list!=='function')fail('invalid_storage_adapter');
+ if(!Number.isSafeInteger(maxPages)||maxPages<1)fail('invalid_storage_page_limit');
  const objects=[];
  const pending=[''];
  const visited=new Set();
@@ -74,7 +75,7 @@ export async function listAllSourceObjects(adapter,bucket){
   visited.add(prefix);
   let offset=0;
   let previousFingerprint=null;
-  for(let page=0;page<10000;page++){
+  for(let page=0;page<maxPages;page++){
    const rows=unwrap(await adapter.list(bucket,{prefix,limit:PAGE_SIZE,offset,sortBy:{column:'name',order:'asc'}}));
    if(!Array.isArray(rows))fail('invalid_storage_listing');
    const fingerprint=rows.map(item=>`${item?.name}:${isFolder(item)?'d':'f'}`).join('|');
@@ -87,6 +88,7 @@ export async function listAllSourceObjects(adapter,bucket){
     else objects.push(normalizedObject(bucket,prefix,item));
    }
    if(rows.length<PAGE_SIZE)break;
+   if(page===maxPages-1)fail('storage_pagination_limit');
    offset+=rows.length;
   }
  }
@@ -136,8 +138,11 @@ export async function ensureBackupBlob(adapter,object,now=new Date()){
 export async function backupStorage(adapter,now=new Date()){
  const entries=[];
  for(const bucket of BACKUP_SOURCE_BUCKETS){
-  const objects=await listAllSourceObjects(adapter,bucket);
-  for(const object of objects)entries.push(await ensureBackupBlob(adapter,object,now));
+  const before=await listAllSourceObjects(adapter,bucket);
+  for(const object of before)entries.push(await ensureBackupBlob(adapter,object,now));
+  const after=await listAllSourceObjects(adapter,bucket);
+  const inventory=objects=>JSON.stringify(objects.map(({path,size,mimeType,updatedAt,etag})=>({path,size,mimeType,updatedAt,etag})));
+  if(inventory(before)!==inventory(after))fail('storage_inventory_changed');
  }
  return entries;
 }

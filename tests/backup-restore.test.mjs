@@ -30,7 +30,7 @@ async function fixture({parentId='p1'}={}){
  const storageEntry={source_bucket:'receipts',source_path:'r/file.txt',source_size:blobBytes.byteLength,source_mime_type:'text/plain',source_updated_at:'2026-09-11T00:00:00.000Z',source_etag:null,source_checksum:blobHash,backup_blob_path:`blobs/sha256/${blobHash.slice(0,2)}/${blobHash}`,backup_checksum:blobHash,backed_up_at:'2026-09-11T12:00:00.000Z'};
  const databaseBytes=tables.reduce((n,t)=>n+t.bytes,0);
  const draft={format_version:1,implementation_version:'backup-v1',status:'complete',project_ref:'blaacuwwvyatfiyjnsrw',environment:'production',backup_id:backupId,run_id:'223e4567-e89b-42d3-a456-426614174000',created_at:'2026-09-11T12:00:00.000Z',started_at:'2026-09-11T12:00:00.000Z',completed_at:'2026-09-11T12:00:01.000Z',source_git_checkpoint:'9ddebffea4ced78aa3002f7c1fe5b2d1255fa3e0',spec_checkpoint:'backup-v1-design-2026-09-11',database:{table_count:2,row_count:2,bytes:databaseBytes,tables},storage:{file_count:1,bytes:blobBytes.byteLength,objects:[storageEntry]},totals:{bytes:databaseBytes+blobBytes.byteLength},duration_ms:1000,warnings:[],errors:[]};
- return {mode:'dry-run',manifest:await sealManifest(draft),databaseParts,backupBlobs:{[storageEntry.backup_blob_path]:blobBytes},liveSchema:structuredClone(tables.map(({row_count,bytes,part_count,parts,checksum,...meta})=>meta)),targetRows:{parents:[parent],children:[]},targetStorage:[]};
+ return {mode:'dry-run',manifest:await sealManifest(draft),expectedTables:['parents','children'],databaseParts,backupBlobs:{[storageEntry.backup_blob_path]:blobBytes},liveSchema:structuredClone(tables.map(({row_count,bytes,part_count,parts,checksum,...meta})=>meta)),targetRows:{parents:[parent],children:[]},targetStorage:[]};
 }
 
 test('FK ordering is deterministic and rejects cycles or unknown targets',()=>{
@@ -65,6 +65,38 @@ test('dry run detects row conflicts and missing dependencies',async()=>{
  assert.equal((await buildRestoreDryRun(conflict)).database.conflict,1);
  const missing=await fixture({parentId:'not-present'});
  assert.equal((await buildRestoreDryRun(missing)).database.missing_dependency,1);
+});
+
+test('dry run propagates missing dependencies through the FK graph',async()=>{
+ const input=await fixture();
+ const parentTable=input.manifest.database.tables.find(table=>table.table_name==='parents');
+ parentTable.columns.push({name:'root_id',type:'text',nullable:false,ordinal:3});
+ parentTable.foreign_keys=[{name:'parents_root_fk',columns:['root_id'],referenced_schema:'public',referenced_table:'roots',referenced_columns:['id']}];
+ const parentPath=parentTable.parts[0].path;
+ const parentBody=stableStringify({id:'p1',name:'Parent',root_id:'missing-root'});
+ parentTable.parts[0].bytes=new TextEncoder().encode(parentBody).byteLength;
+ parentTable.parts[0].checksum=await sha256Hex(parentBody);
+ parentTable.bytes=parentTable.parts[0].bytes;
+ parentTable.checksum=await sha256Hex(parentTable.parts[0].checksum);
+ input.databaseParts[parentPath]=parentBody;
+ const emptyHash=await sha256Hex('');
+ const rootTable={table_name:'roots',columns:[{name:'id',type:'text',nullable:false,ordinal:1}],numeric_columns:[],primary_key:['id'],foreign_keys:[],row_count:0,bytes:0,part_count:1,checksum:await sha256Hex(emptyHash),parts:[{path:`database/${backupId}/tables/roots/part-000001.ndjson`,row_count:0,bytes:0,checksum:emptyHash}]};
+ input.databaseParts[rootTable.parts[0].path]='';
+ input.manifest.database.tables.push(rootTable);
+ input.manifest.database.table_count=3;
+ input.manifest.database.bytes=input.manifest.database.tables.reduce((total,table)=>total+table.bytes,0);
+ input.manifest.totals.bytes=input.manifest.database.bytes+input.manifest.storage.bytes;
+ input.liveSchema=input.manifest.database.tables.map(({row_count,bytes,part_count,parts,checksum,...meta})=>structuredClone(meta));
+ input.targetRows.parents=[];
+ input.targetRows.roots=[];
+ input.expectedTables=['parents','children','roots'];
+ delete input.manifest.integrity_checksum;
+ input.manifest=await sealManifest(input.manifest);
+
+ const result=await buildRestoreDryRun(input);
+ assert.equal(result.database.tables.parents.missing_dependency,1);
+ assert.equal(result.database.tables.children.missing_dependency,1);
+ assert.equal(result.database.insert,0);
 });
 
 test('dry run rejects missing or corrupt database parts',async()=>{

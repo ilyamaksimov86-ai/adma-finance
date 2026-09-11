@@ -113,7 +113,7 @@ export function buildRestoreDryRun(input){
 
 async function buildRestoreDryRunAsync(input){
  object(input,'invalid_restore_input');
- await validateManifest(input.manifest);
+ await validateManifest(input.manifest,input.expectedTables);
  const manifest=input.manifest;
  if(!Array.isArray(input.liveSchema))fail('invalid_live_schema');
  const manifestNames=manifest.database.tables.map(table=>table.table_name).sort();
@@ -155,14 +155,16 @@ async function buildRestoreDryRunAsync(input){
  const targetRows=input.targetRows??{};
  for(const name of Object.keys(targetRows))if(!liveByName.has(name))fail('unknown_target_table');
  const targetIndexes={};
- const snapshotIndexes={};
  for(const table of manifest.database.tables){
   targetIndexes[table.table_name]=indexRows(targetRows[table.table_name]??[],table,'target');
-  snapshotIndexes[table.table_name]=indexRows(snapshotRows[table.table_name],table,'snapshot');
  }
 
  const database={insert:0,existing_identical:0,conflict:0,missing_dependency:0,total:0,tables:{}};
- for(const table of manifest.database.tables){
+ const tableOrder=topologicalTableOrder(manifest.database.tables);
+ const tableByName=new Map(manifest.database.tables.map(table=>[table.table_name,table]));
+ const availableIndexes={};
+ for(const tableName of tableOrder){
+  const table=tableByName.get(tableName);
   const eligible=[];
   let missing=0;
   for(const row of snapshotRows[table.table_name]){
@@ -173,7 +175,7 @@ async function buildRestoreDryRunAsync(input){
     if(values.every(value=>value===null))continue;
     if(values.some(value=>value===null)){rowMissing=true;break;}
     const parentKey=stableStringify(values);
-    if(!snapshotIndexes[fk.referenced_table].has(parentKey)&&!targetIndexes[fk.referenced_table].has(parentKey)){rowMissing=true;break;}
+    if(!availableIndexes[fk.referenced_table]?.has(parentKey)){rowMissing=true;break;}
    }
    if(rowMissing)missing++;else eligible.push(row);
   }
@@ -181,7 +183,10 @@ async function buildRestoreDryRunAsync(input){
   const tableResult={...classified,missing_dependency:missing,total:snapshotRows[table.table_name].length};
   database.tables[table.table_name]=tableResult;
   for(const field of ['insert','existing_identical','conflict','missing_dependency','total'])database[field]+=tableResult[field];
+  const available=new Map(targetIndexes[table.table_name]);
+  for(const row of eligible)available.set(keyFor(row,table.primary_key,'missing_snapshot_key'),row);
+  availableIndexes[table.table_name]=available;
  }
  const storage=classifyStorage(manifest.storage.objects,input.targetStorage??[]);
- return {mode:'dry-run',backup_id:manifest.backup_id,table_order:topologicalTableOrder(manifest.database.tables),database,storage,validated_parts:manifest.database.tables.reduce((n,table)=>n+table.parts.length,0),validated_blobs:manifest.storage.objects.length};
+ return {mode:'dry-run',backup_id:manifest.backup_id,table_order:tableOrder,database,storage,validated_parts:manifest.database.tables.reduce((n,table)=>n+table.parts.length,0),validated_blobs:manifest.storage.objects.length};
 }

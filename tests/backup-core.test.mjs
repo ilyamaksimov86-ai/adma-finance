@@ -85,23 +85,23 @@ test('manifest sealing is deterministic and detects tampering',async()=>{
  const first=await sealManifest(draftManifest());
  const second=await sealManifest(structuredClone(draftManifest()));
  assert.equal(first.integrity_checksum,second.integrity_checksum);
- assert.equal(await validateManifest(first),true);
+ assert.equal(await validateManifest(first,['projects']),true);
  first.database.tables[0].parts[0].bytes=21;
- await assert.rejects(()=>validateManifest(first),/manifest_integrity_mismatch/);
+ await assert.rejects(()=>validateManifest(first,['projects']),/manifest_integrity_mismatch/);
 });
 
 test('manifest validation requires exact fields, counts, sizes, paths and hashes',async()=>{
  const missing=draftManifest();
  delete missing.project_ref;
- await assert.rejects(async()=>validateManifest(await sealManifest(missing)),/invalid_project_ref/);
+ await assert.rejects(async()=>validateManifest(await sealManifest(missing),['projects']),/invalid_project_ref/);
 
  const wrongCount=draftManifest();
  wrongCount.database.row_count=2;
- await assert.rejects(async()=>validateManifest(await sealManifest(wrongCount)),/database_row_count_mismatch/);
+ await assert.rejects(async()=>validateManifest(await sealManifest(wrongCount),['projects']),/database_row_count_mismatch/);
 
  const wrongPath=draftManifest();
  wrongPath.database.tables[0].parts[0].path='../part.ndjson';
- await assert.rejects(async()=>validateManifest(await sealManifest(wrongPath)),/invalid_database_part_path/);
+ await assert.rejects(async()=>validateManifest(await sealManifest(wrongPath),['projects']),/invalid_database_part_path/);
 
  for(const [field,code] of [
   ['environment','invalid_environment'],['run_id','invalid_run_id'],
@@ -112,18 +112,24 @@ test('manifest validation requires exact fields, counts, sizes, paths and hashes
  ]){
   const invalid=draftManifest();
   delete invalid[field];
-  await assert.rejects(async()=>validateManifest(await sealManifest(invalid)),new RegExp(code),field);
+  await assert.rejects(async()=>validateManifest(await sealManifest(invalid),['projects']),new RegExp(code),field);
  }
 
  const reversed=draftManifest();
  reversed.completed_at='2026-09-11T11:59:59.000Z';
- await assert.rejects(async()=>validateManifest(await sealManifest(reversed)),/invalid_manifest_time_range/);
+ await assert.rejects(async()=>validateManifest(await sealManifest(reversed),['projects']),/invalid_manifest_time_range/);
 });
 
 test('manifest forbids recursive backup sources',async()=>{
  const recursive=draftManifest();
  recursive.storage.objects[0].source_bucket='adma-backups';
- await assert.rejects(async()=>validateManifest(await sealManifest(recursive)),/invalid_source_bucket/);
+ await assert.rejects(async()=>validateManifest(await sealManifest(recursive),['projects']),/invalid_source_bucket/);
+});
+
+test('production manifest validation requires the complete approved table set',async()=>{
+ const manifest=await sealManifest(draftManifest());
+ await assert.rejects(()=>validateManifest(manifest),/application_table_set_mismatch/);
+ assert.equal(await validateManifest(manifest,['projects']),true);
 });
 
 test('safe errors are bounded, single-line and redact obvious credentials',()=>{

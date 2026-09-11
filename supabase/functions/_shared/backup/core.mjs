@@ -4,6 +4,13 @@ const HASH_RE=/^[0-9a-f]{64}$/;
 const TABLE_RE=/^[a-z][a-z0-9_]{0,62}$/;
 const PROJECT_REF='blaacuwwvyatfiyjnsrw';
 const SOURCE_BUCKETS=new Set(['receipts','finance-documents','project-files','knowledge-files']);
+const APPLICATION_TABLES=Object.freeze([
+ 'app_users','company_expenses','designer_interactions','designers','expenses',
+ 'finance_act_costs','finance_act_payments','finance_acts','finance_waybill_payments','finance_waybills',
+ 'knowledge_attachments','knowledge_issues','knowledge_tech_cards','knowledge_tech_checklist_items',
+ 'lead_interactions','leads','master_assignments','masters','project_documents','project_members',
+ 'project_photos','project_stages','project_tasks','projects',
+]);
 const THREE_DAYS_MS=72*60*60*1000;
 
 function fail(code){throw new Error(code);}
@@ -68,6 +75,11 @@ export function assertBackupId(value){
  return value;
 }
 
+export function assertManifestRunBinding(manifest,run,manifestPath){
+ if(!run||manifest?.run_id!==run.id||manifest?.backup_id!==run.backup_id||manifest?.integrity_checksum!==run.checksum||run?.metadata?.manifest_path!==manifestPath)fail('manifest_run_mismatch');
+ return true;
+}
+
 export function stableStringify(value){
  return JSON.stringify(normalizedJson(value));
 }
@@ -97,7 +109,7 @@ export async function sealManifest(draft){
  return {...copy,integrity_checksum:await sha256Hex(stableStringify(copy))};
 }
 
-export async function validateManifest(manifest){
+export async function validateManifest(manifest,expectedTables=APPLICATION_TABLES){
  requireObject(manifest,'invalid_manifest');
  requireHash(manifest.integrity_checksum,'invalid_integrity_checksum');
  const unsigned=structuredClone(manifest);
@@ -151,6 +163,7 @@ export async function validateManifest(manifest){
   if(sum(table.parts,'bytes')!==table.bytes)fail('table_bytes_mismatch');
   if(await sha256Hex(table.parts.map(part=>part.checksum).join(''))!==table.checksum)fail('table_checksum_mismatch');
  }
+ if(!Array.isArray(expectedTables)||new Set(expectedTables).size!==expectedTables.length||JSON.stringify([...tableNames].sort())!==JSON.stringify([...expectedTables].sort()))fail('application_table_set_mismatch');
  if(sum(database.tables,'row_count')!==database.row_count)fail('database_row_count_mismatch');
  if(sum(database.tables,'bytes')!==database.bytes)fail('database_bytes_mismatch');
 
@@ -195,3 +208,4 @@ export function safeBackupError(error){
 }
 
 export const BACKUP_SOURCE_BUCKETS=Object.freeze([...SOURCE_BUCKETS]);
+export const BACKUP_APPLICATION_TABLES=APPLICATION_TABLES;

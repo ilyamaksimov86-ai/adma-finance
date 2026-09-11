@@ -53,6 +53,19 @@ test('claim and terminal RPCs enforce concurrency, age and safe failure',()=>{
  assert.match(sql,/already_running/);
  assert.match(sql,/left\([\s\S]*1000\)/);
  assert.match(sql,/where id = p_run_id[\s\S]*and status = 'running'/);
+ assert.match(sql,/p_checksum is null[\s\S]*p_duration_ms is null/);
+ assert.match(sql,/status <> 'success'[\s\S]*checksum is not null[\s\S]*duration_ms is not null/);
+});
+
+test('backup claims and retention share a fail-closed maintenance lease',()=>{
+ assert.match(sql,/create table private\.backup_maintenance_state[\s\S]*retention_started_at timestamptz/);
+ assert.match(sql,/claim_backup_run[\s\S]*retention_started_at[\s\S]*maintenance_busy/);
+ assert.match(sql,/create or replace function public\.begin_backup_retention\(\)[\s\S]*backup_runs[\s\S]*status = 'running'/);
+ assert.match(sql,/create or replace function public\.end_backup_retention\(\)/);
+ for(const fn of ['begin_backup_retention','end_backup_retention']){
+  assert.match(sql,new RegExp(`revoke all on function public\\.${fn}\\(\\)`));
+  assert.match(sql,new RegExp(`grant execute on function public\\.${fn}\\(\\) to service_role`));
+ }
 });
 
 test('snapshot RPC is repeatable-read, deterministic and lossless',()=>{
@@ -64,6 +77,7 @@ test('snapshot RPC is repeatable-read, deterministic and lossless',()=>{
  assert.match(sql,/least\([\s\S]*500/i);
  assert.match(sql,/json_build_object/i);
  assert.match(sql,/'columns',[\s\S]*con\.conkey[\s\S]*'referenced_columns',[\s\S]*con\.confkey/i);
+ assert.match(sql,/raise exception 'snapshot table set mismatch'/);
  assert.match(sql,/format\([\s\S]*%I/);
  assert.match(sql,/set search_path = ''/);
 });
