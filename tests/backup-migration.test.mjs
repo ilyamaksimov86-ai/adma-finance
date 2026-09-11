@@ -62,6 +62,7 @@ test('snapshot RPC is repeatable-read, deterministic and lossless',()=>{
  assert.match(sql,/order by[\s\S]*primary/i);
  assert.match(sql,/least\([\s\S]*500/i);
  assert.match(sql,/json_build_object/i);
+ assert.match(sql,/'columns',[\s\S]*con\.conkey[\s\S]*'referenced_columns',[\s\S]*con\.confkey/i);
  assert.match(sql,/format\([\s\S]*%I/);
  assert.match(sql,/set search_path = ''/);
 });

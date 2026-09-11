@@ -349,8 +349,22 @@ begin
     select coalesce(jsonb_agg(jsonb_build_object(
              'name',con.conname,
              'definition',pg_catalog.pg_get_constraintdef(con.oid,true),
+             'columns',(
+               select array_agg(local_attribute.attname order by local_key.ordinality)
+                 from unnest(con.conkey) with ordinality local_key(attnum,ordinality)
+                 join pg_catalog.pg_attribute local_attribute
+                   on local_attribute.attrelid = con.conrelid
+                  and local_attribute.attnum = local_key.attnum
+             ),
              'referenced_schema',rn.nspname,
-             'referenced_table',rc.relname
+             'referenced_table',rc.relname,
+             'referenced_columns',(
+               select array_agg(referenced_attribute.attname order by referenced_key.ordinality)
+                 from unnest(con.confkey) with ordinality referenced_key(attnum,ordinality)
+                 join pg_catalog.pg_attribute referenced_attribute
+                   on referenced_attribute.attrelid = con.confrelid
+                  and referenced_attribute.attnum = referenced_key.attnum
+             )
            ) order by con.conname),'[]'::jsonb)
       into v_foreign_keys
       from pg_catalog.pg_constraint con
