@@ -57,6 +57,7 @@ test('claim and terminal RPCs enforce concurrency, age and safe failure',()=>{
 
 test('snapshot RPC is repeatable-read, deterministic and lossless',()=>{
  assert.match(sql,/set default_transaction_isolation to 'repeatable read'/);
+ assert.match(sql,/set timezone = 'UTC'/);
  assert.match(sql,/numeric[\s\S]*::text/i);
  assert.match(sql,/digest\([\s\S]*'sha256'/i);
  assert.match(sql,/order by[\s\S]*primary/i);
@@ -71,13 +72,19 @@ test('snapshot readers are registry-bound and service-only',()=>{
  for(const fn of [
   'claim_backup_run','prepare_backup_snapshot','read_backup_snapshot_chunks',
   'read_backup_snapshot_tables','read_backup_table_page','verify_backup_secret',
-  'finish_backup_run','fail_backup_run',
+  'finish_backup_run','fail_backup_run','clear_backup_snapshot','read_backup_live_schema',
+  'read_backup_config','record_backup_restore_dry_run',
  ]){
   assert.match(sql,new RegExp(`revoke all on function public\\.${fn}\\(`),`${fn} must revoke PUBLIC execution`);
   assert.match(sql,new RegExp(`grant execute on function public\\.${fn}\\(`),`${fn} must grant service role execution`);
  }
  assert.match(sql,/read_backup_table_page[\s\S]*backup_table_registry[\s\S]*included/i);
  assert.match(sql,/p_limit[\s\S]*between 1 and 500/i);
+ assert.match(sql,/read_backup_snapshot_chunks\(p_run_id uuid,p_offset integer default 0,p_limit integer default 100\)/);
+ assert.match(sql,/p_limit not between 1 and 100/);
+ assert.match(sql,/backup_config[\s\S]*source_git_checkpoint text[\s\S]*spec_checkpoint text/);
+ assert.match(sql,/metadata = metadata \|\| jsonb_build_object\('restore_dry_run',p_result\)/);
+ assert.match(sql,/read_backup_live_schema\(\)[\s\S]*unclassified public tables[\s\S]*return query/i);
 });
 
 test('backup bucket and daily vault-authenticated cron are private',()=>{

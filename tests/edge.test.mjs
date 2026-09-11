@@ -11,6 +11,17 @@ function handler(name,db,actor) {
   {env:{get:()=> 'test-config'},serve:h=>serve=h},()=>db,actor ? async()=>actor : requireUser,credentialsFromForm,AuthError);
  return serve;
 }
+function backupHandler(db,overrides={}) {
+ let serve;
+ const source=readFileSync(new URL('../supabase/functions/backup-adma/index.ts',import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
+ const js=stripTypeScriptTypes(source);
+ const EdgeRuntime={waitUntil:overrides.waitUntil??(()=>{})};
+ new Function('Deno','createClient','runBackup','runRestoreDryRun','assertBackupId','createSupabaseBackupDeps','EdgeRuntime',js)(
+  {env:{get:key=>key==='SUPABASE_URL'?'https://test.invalid':'test-config'},serve:h=>serve=h},()=>db,
+  overrides.runBackup??(async()=>({status:'success'})),overrides.runRestoreDryRun??(async()=>({mode:'dry-run'})),
+  value=>value,overrides.createSupabaseBackupDeps??(()=>({db:{readConfig:async()=>({source_git_checkpoint:'a'.repeat(40),spec_checkpoint:'spec'})}})),EdgeRuntime);
+ return serve;
+}
 function projectParser() {
  const source=readFileSync(new URL('../supabase/functions/adma-api/index.ts',import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
  const js=stripTypeScriptTypes(source);
@@ -27,10 +38,38 @@ const request=body=>new Request('https://test.invalid',{method:'POST',headers:{'
 const actor={id:'existing-user',role:'foreman',is_active:true};
 const credentials={action:'set_credentials',login:'ilya',password:'new-password-123',initData:'test'};
 test('all modified Edge Functions parse',()=>{
- for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api','leads-api','knowledge-api','knowledge-file-upload','storage-cleanup']){
+ for(const name of ['adma-api','receipt-upload','reimbursement-pdf','account-admin','web-auth','finance-api','finance-file-upload','masters-api','project-operations-api','project-file-upload','designers-api','leads-api','knowledge-api','knowledge-file-upload','storage-cleanup','backup-adma']){
   const source=readFileSync(new URL(`../supabase/functions/${name}/index.ts`,import.meta.url),'utf8').replace(/^import .*;\s*$/gm,'');
   assert.doesNotThrow(()=>new Function(stripTypeScriptTypes(source)));
  }
+});
+test('backup function rejects missing and invalid secrets before backup or Storage access',async()=>{
+ let created=false,storageTouched=false;const rpcCalls=[];
+ const missing=backupHandler({}, {createSupabaseBackupDeps:()=>{created=true;return{};}});
+ const missingResponse=await missing(new Request('https://test.invalid',{method:'POST',body:'{"action":"backup"}'}));
+ assert.equal(missingResponse.status,401);assert.equal(created,false);
+
+ const db={rpc:async(name)=>{rpcCalls.push(name);return{data:false,error:null};},storage:{from:()=>{storageTouched=true;}}};
+ const invalid=backupHandler(db);
+ const invalidResponse=await invalid(new Request('https://test.invalid',{method:'POST',headers:{'X-Backup-Secret':'wrong'},body:'{"action":"backup"}'}));
+ assert.equal(invalidResponse.status,401);
+ assert.deepEqual(rpcCalls,['verify_backup_secret']);
+ assert.equal(storageTouched,false);
+});
+test('backup function schedules backup, runs dry-run synchronously and rejects invalid actions',async()=>{
+ const db={rpc:async name=>name==='verify_backup_secret'?{data:true,error:null}:{data:null,error:null}};
+ const deps={db:{readConfig:async()=>({source_git_checkpoint:'a'.repeat(40),spec_checkpoint:'spec'})}};
+ let pending,backupCalls=0,restoreCalls=0;
+ const overrides={createSupabaseBackupDeps:()=>deps,waitUntil:value=>{pending=value;},runBackup:async()=>{backupCalls++;return{status:'success'};},runRestoreDryRun:async()=>{restoreCalls++;return{mode:'dry-run'};}};
+ const serve=backupHandler(db,overrides);
+ const backup=await serve(new Request('https://test.invalid',{method:'POST',headers:{'X-Backup-Secret':'ok'},body:'{"action":"backup"}'}));
+ assert.equal(backup.status,202);await pending;assert.equal(backupCalls,1);
+ const restore=await serve(new Request('https://test.invalid',{method:'POST',headers:{'X-Backup-Secret':'ok'},body:JSON.stringify({action:'restore_dry_run',backup_id:'2026-09-11T120000Z_123e4567-e89b-42d3-a456-426614174000'})}));
+ assert.equal(restore.status,200);assert.equal(restoreCalls,1);
+ const unsupported=await serve(new Request('https://test.invalid',{method:'POST',headers:{'X-Backup-Secret':'ok'},body:'{"action":"delete"}'}));
+ assert.equal(unsupported.status,400);
+ const nullBody=await serve(new Request('https://test.invalid',{method:'POST',headers:{'X-Backup-Secret':'ok'},body:'null'}));
+ assert.equal(nullBody.status,400);
 });
 test('foreman cannot mutate the global master directory',async()=>{
  for(const body of [{action:'save_master',master:{}},{action:'save_assignment',assignment:{}},{action:'set_master_archived',id:'test'}]){

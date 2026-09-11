@@ -107,6 +107,7 @@ create table private.backup_config (
   format_version integer not null default 1 check (format_version = 1),
   implementation_version text not null default 'backup-v1',
   source_git_checkpoint text,
+  spec_checkpoint text,
   updated_at timestamptz not null default now()
 );
 insert into private.backup_config (singleton) values (true);
@@ -165,7 +166,7 @@ begin
   end if;
 
   insert into public.backup_runs (backup_id,backup_path)
-  values (p_backup_id,p_backup_id)
+  values (p_backup_id,'database/' || p_backup_id)
   returning id into v_run_id;
 
   return query select 'started'::text,v_run_id,p_backup_id;
@@ -246,6 +247,7 @@ volatile
 security definer
 set search_path = ''
 set default_transaction_isolation to 'repeatable read'
+set timezone = 'UTC'
 as $$
 declare
   r record;
@@ -432,17 +434,24 @@ begin
 end;
 $$;
 
-create or replace function public.read_backup_snapshot_chunks(p_run_id uuid)
+create or replace function public.read_backup_snapshot_chunks(p_run_id uuid,p_offset integer default 0,p_limit integer default 100)
 returns table(table_name text,chunk_index integer,row_count integer,body text,bytes bigint,checksum text)
-language sql
+language plpgsql
 stable
 security definer
 set search_path = ''
 as $$
-  select c.table_name,c.chunk_index,c.row_count,c.body,c.bytes,c.checksum
-    from private.backup_snapshot_chunks c
-   where c.run_id = p_run_id
-   order by c.table_name,c.chunk_index;
+begin
+  if p_offset < 0 or p_limit not between 1 and 100 then
+    raise exception 'invalid_chunk_page' using errcode = '22023';
+  end if;
+  return query
+    select c.table_name,c.chunk_index,c.row_count,c.body,c.bytes,c.checksum
+      from private.backup_snapshot_chunks c
+     where c.run_id = p_run_id
+     order by c.table_name,c.chunk_index
+     offset p_offset limit p_limit;
+end;
 $$;
 
 create or replace function public.read_backup_snapshot_tables(p_run_id uuid)
@@ -457,6 +466,155 @@ as $$
     from private.backup_snapshot_tables t
    where t.run_id = p_run_id
    order by t.table_name;
+$$;
+
+create or replace function public.read_backup_live_schema()
+returns table(table_name text,columns jsonb,numeric_columns text[],primary_key text[],foreign_keys jsonb)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if exists (
+    select 1
+      from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+      left join private.backup_table_registry b on b.table_name = c.relname
+     where n.nspname = 'public' and c.relkind in ('r','p') and b.table_name is null
+  ) then
+    raise exception 'unclassified public tables';
+  end if;
+  if exists (
+    select 1
+      from private.backup_table_registry b
+      join pg_catalog.pg_class c on c.relname = b.table_name
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+      join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+     where b.included
+       and not (a.attname = any(b.excluded_columns))
+       and a.attname ~* '(^|_)(password|password_hash|token|secret|api_key|service_key|credential|session|refresh_token|access_token)($|_)'
+  ) then
+    raise exception 'secret-like unclassified columns';
+  end if;
+  return query
+  select b.table_name,
+         (
+           select jsonb_agg(jsonb_build_object(
+                    'name',a.attname,
+                    'type',pg_catalog.format_type(a.atttypid,a.atttypmod),
+                    'nullable',not a.attnotnull,
+                    'ordinal',a.attnum
+                  ) order by a.attnum)
+             from pg_catalog.pg_attribute a
+             join pg_catalog.pg_class c on c.oid = a.attrelid
+             join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relname = b.table_name
+              and a.attnum > 0 and not a.attisdropped
+              and not (a.attname = any(b.excluded_columns))
+         ) as columns,
+         coalesce((
+           select array_agg(a.attname order by a.attnum)
+             from pg_catalog.pg_attribute a
+             join pg_catalog.pg_class c on c.oid = a.attrelid
+             join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+             join pg_catalog.pg_type t on t.oid = a.atttypid
+            where n.nspname = 'public' and c.relname = b.table_name
+              and a.attnum > 0 and not a.attisdropped
+              and not (a.attname = any(b.excluded_columns))
+              and t.typname = 'numeric'
+         ),'{}'::text[]) as numeric_columns,
+         (
+           select array_agg(a.attname order by k.ordinality)
+             from pg_catalog.pg_constraint con
+             join lateral unnest(con.conkey) with ordinality k(attnum,ordinality) on true
+             join pg_catalog.pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.attnum
+             join pg_catalog.pg_class c on c.oid = con.conrelid
+             join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+            where con.contype = 'p' and n.nspname = 'public' and c.relname = b.table_name
+         ) as primary_key,
+         coalesce((
+           select jsonb_agg(jsonb_build_object(
+                    'name',con.conname,
+                    'definition',pg_catalog.pg_get_constraintdef(con.oid,true),
+                    'columns',(
+                      select array_agg(local_attribute.attname order by local_key.ordinality)
+                        from unnest(con.conkey) with ordinality local_key(attnum,ordinality)
+                        join pg_catalog.pg_attribute local_attribute
+                          on local_attribute.attrelid = con.conrelid
+                         and local_attribute.attnum = local_key.attnum
+                    ),
+                    'referenced_schema',rn.nspname,
+                    'referenced_table',rc.relname,
+                    'referenced_columns',(
+                      select array_agg(referenced_attribute.attname order by referenced_key.ordinality)
+                        from unnest(con.confkey) with ordinality referenced_key(attnum,ordinality)
+                        join pg_catalog.pg_attribute referenced_attribute
+                          on referenced_attribute.attrelid = con.confrelid
+                         and referenced_attribute.attnum = referenced_key.attnum
+                    )
+                  ) order by con.conname)
+             from pg_catalog.pg_constraint con
+             join pg_catalog.pg_class c on c.oid = con.conrelid
+             join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+             join pg_catalog.pg_class rc on rc.oid = con.confrelid
+             join pg_catalog.pg_namespace rn on rn.oid = rc.relnamespace
+            where con.contype = 'f' and n.nspname = 'public' and c.relname = b.table_name
+         ),'[]'::jsonb) as foreign_keys
+   from private.backup_table_registry b
+   where b.included
+   order by b.table_name;
+end;
+$$;
+
+create or replace function public.clear_backup_snapshot(p_run_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (
+    select 1 from public.backup_runs
+     where id = p_run_id and status in ('success','failed')
+  ) then
+    raise exception 'backup_run_not_terminal' using errcode = '55000';
+  end if;
+  delete from private.backup_snapshot_chunks where run_id = p_run_id;
+  delete from private.backup_snapshot_tables where run_id = p_run_id;
+  return true;
+end;
+$$;
+
+create or replace function public.read_backup_config()
+returns table(format_version integer,implementation_version text,source_git_checkpoint text,spec_checkpoint text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select c.format_version,c.implementation_version,c.source_git_checkpoint,c.spec_checkpoint
+    from private.backup_config c
+   where c.singleton;
+$$;
+
+create or replace function public.record_backup_restore_dry_run(p_run_id uuid,p_result jsonb)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare v_changed integer;
+begin
+  if jsonb_typeof(p_result) <> 'object' then
+    raise exception 'invalid_restore_result' using errcode = '22023';
+  end if;
+  update public.backup_runs
+     set metadata = metadata || jsonb_build_object('restore_dry_run',p_result)
+   where id = p_run_id and status = 'success';
+  get diagnostics v_changed = row_count;
+  return v_changed = 1;
+end;
 $$;
 
 create or replace function public.read_backup_table_page(
@@ -506,7 +664,12 @@ begin
      and a.attnum > 0 and not a.attisdropped
      and not (a.attname = any(r.excluded_columns));
 
-  select string_agg(format('%L,%I',a.attname,a.attname),',' order by k.ordinality),
+  select string_agg(format('%L,%s',a.attname,
+           case when t.typname = 'numeric'
+             then format('case when %I is null then null else %I::text end',a.attname,a.attname)
+             else format('%I',a.attname)
+           end
+         ),',' order by k.ordinality),
          string_agg(format('%I',a.attname),',' order by k.ordinality),
          string_agg(format('%I',a.attname),',' order by k.ordinality),
          string_agg(format('($1->>%L)::%s',a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod)),',' order by k.ordinality)
@@ -514,6 +677,7 @@ begin
     from pg_catalog.pg_constraint con
     join lateral unnest(con.conkey) with ordinality k(attnum,ordinality) on true
     join pg_catalog.pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.attnum
+    join pg_catalog.pg_type t on t.oid = a.atttypid
     join pg_catalog.pg_class c on c.oid = con.conrelid
     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
    where con.contype = 'p' and n.nspname = 'public' and c.relname = r.table_name;
@@ -591,10 +755,18 @@ revoke all on function public.finish_backup_run(uuid,integer,bigint,bigint,bigin
 grant execute on function public.finish_backup_run(uuid,integer,bigint,bigint,bigint,bigint,text,bigint,jsonb,jsonb) to service_role;
 revoke all on function public.prepare_backup_snapshot(uuid) from public, anon, authenticated;
 grant execute on function public.prepare_backup_snapshot(uuid) to service_role;
-revoke all on function public.read_backup_snapshot_chunks(uuid) from public, anon, authenticated;
-grant execute on function public.read_backup_snapshot_chunks(uuid) to service_role;
+revoke all on function public.read_backup_snapshot_chunks(uuid,integer,integer) from public, anon, authenticated;
+grant execute on function public.read_backup_snapshot_chunks(uuid,integer,integer) to service_role;
 revoke all on function public.read_backup_snapshot_tables(uuid) from public, anon, authenticated;
 grant execute on function public.read_backup_snapshot_tables(uuid) to service_role;
+revoke all on function public.read_backup_live_schema() from public, anon, authenticated;
+grant execute on function public.read_backup_live_schema() to service_role;
+revoke all on function public.clear_backup_snapshot(uuid) from public, anon, authenticated;
+grant execute on function public.clear_backup_snapshot(uuid) to service_role;
+revoke all on function public.read_backup_config() from public, anon, authenticated;
+grant execute on function public.read_backup_config() to service_role;
+revoke all on function public.record_backup_restore_dry_run(uuid,jsonb) from public, anon, authenticated;
+grant execute on function public.record_backup_restore_dry_run(uuid,jsonb) to service_role;
 revoke all on function public.read_backup_table_page(text,jsonb,integer) from public, anon, authenticated;
 grant execute on function public.read_backup_table_page(text,jsonb,integer) to service_role;
 revoke all on function public.verify_backup_secret(text) from public, anon, authenticated;
