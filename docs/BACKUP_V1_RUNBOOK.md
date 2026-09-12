@@ -2,7 +2,7 @@
 
 ## Purpose and safety boundary
 
-Backup V1 creates repeatable-read logical snapshots of the 24 classified ADMA application tables and incremental physical copies from `receipts`, `finance-documents`, `project-files`, and `knowledge-files`. It excludes `auth.users`, every system schema, `storage_cleanup_queue`, `backup_runs`, `exports`, secrets, credentials, and session data.
+Backup V1 creates single-statement MVCC logical snapshots of the 24 classified ADMA application tables and incremental physical copies from `receipts`, `finance-documents`, `project-files`, and `knowledge-files`. It excludes `auth.users`, every system schema, `storage_cleanup_queue`, `backup_runs`, `exports`, secrets, credentials, and session data.
 
 The database snapshot is transactionally consistent. Supabase Storage has no cross-object snapshot transaction, so each source bucket is inventoried immediately before and after copying. Both deterministic inventories must match; any observed add, removal, or metadata change fails the run instead of publishing a partial manifest.
 
@@ -129,13 +129,13 @@ The wrapper requires `SUPABASE_URL` and `ADMA_BACKUP_SECRET` but never prints th
 
 Require manifest, part, blob, schema, and FK validation to pass. Review aggregate `insert`, `existing_identical`, `conflict`, and `missing_dependency` counts. Backup V1 cannot apply the plan.
 
-Restore validation is intentionally bounded to a 10 MiB manifest, 128 MiB total snapshot, 500,000 database rows, 20,000 database parts, 10,000 Storage objects, and the same 135-second internal deadline as backup execution. Exceeding any limit fails closed and requires a reviewed Backup V2 scaling change; the dry-run never continues with a truncated set.
+Restore validation is intentionally bounded to a 2 MiB manifest, 16 MiB total snapshot, 8 MiB of live target-row JSON, 50,000 database rows, 4,096 database parts, and 2,000 Storage objects. Each database part is capped at 1 MiB and each Storage object at 8 MiB. Raw validated part/blob buffers are released during classification, and all calls share the same 135-second internal deadline as backup execution. Exceeding any limit fails closed and requires a reviewed scaling change; the dry-run never continues with a truncated set.
 
 ## Retention and capacity
 
 The ten newest successful snapshots are retained. Failed runs do not consume a retention slot. Database snapshot objects beyond ten are removable; content-addressed blobs are removed only when older than seven days and unreferenced by every validated retained manifest. Missing or invalid retained manifests disable blob deletion. Failed/incomplete snapshot objects wait seven days.
 
-Retention and backup claims share a database maintenance lease. Retention cannot start while a backup is running, and even a forced backup returns `maintenance_busy` while retention holds the lease. The lease is released in a `finally` path and a lease older than 15 minutes is treated as stale, matching the backup execution deadline with safety margin.
+Retention and backup claims share a database maintenance lease. Retention cannot start while a backup is running, and even a forced backup returns `maintenance_busy` while retention holds the lease. Destructive Storage removal is awaited to completion before the lease can be released; it is never abandoned by a client-side timeout. A lease older than 15 minutes is treated as stale, matching the platform execution ceiling with safety margin. Retention safety warnings are emitted as structured technical logs.
 
 After the first backup, record only aggregate database bytes, manifest bytes, source object count/bytes, unique blob count, total backup bucket bytes, deduplication result, and conservative 30/90-day growth. Stop rollout if ten snapshots could approach the Free-plan 1 GB Storage quota.
 

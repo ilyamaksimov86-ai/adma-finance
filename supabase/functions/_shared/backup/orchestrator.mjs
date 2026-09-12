@@ -6,7 +6,7 @@ import {buildRestoreDryRun} from './restore.mjs';
 const BACKUP_BUCKET='adma-backups';
 const DEFAULT_DEADLINE_MS=135000;
 const RPC_PAGE_SIZE=100;
-const RESTORE_LIMITS=Object.freeze({manifestBytes:10*1024*1024,totalBytes:128*1024*1024,rows:500000,parts:20000,objects:10000});
+const RESTORE_LIMITS=Object.freeze({manifestBytes:2*1024*1024,totalBytes:16*1024*1024,targetBytes:8*1024*1024,partBytes:1024*1024,objectBytes:8*1024*1024,rows:50000,parts:4096,objects:2000});
 
 function fail(code){throw new Error(code);}
 function byteLength(value){return new TextEncoder().encode(value).byteLength;}
@@ -22,6 +22,8 @@ export function assertRestoreBounds(manifest,limits=RESTORE_LIMITS){
  if(!Number.isSafeInteger(manifest?.database?.row_count)||manifest.database.row_count>limits.rows)fail('restore_row_limit');
  if(!Number.isSafeInteger(partCount)||partCount>limits.parts)fail('restore_part_limit');
  if(!Number.isSafeInteger(manifest?.storage?.file_count)||manifest.storage.file_count>limits.objects)fail('restore_object_limit');
+ if(manifest?.database?.tables?.some(table=>table?.parts?.some(part=>!Number.isSafeInteger(part?.bytes)||part.bytes>limits.partBytes)))fail('restore_part_byte_limit');
+ if(manifest?.storage?.objects?.some(object=>!Number.isSafeInteger(object?.source_size)||object.source_size>limits.objectBytes))fail('restore_object_byte_limit');
  if(!Number.isSafeInteger(manifest?.totals?.bytes)||manifest.totals.bytes>limits.totalBytes)fail('restore_byte_limit');
  return true;
 }
@@ -46,6 +48,21 @@ function boundedAdapter(adapter,clock,started,deadlineMs,invalidCode){
   const value=Reflect.get(target,property,receiver);
   if(typeof value!=='function')return value;
   return (...args)=>withinDeadline(()=>value.apply(target,args),clock,started,deadlineMs);
+ }});
+}
+
+async function withinDestructiveDeadline(operation,clock,started,deadlineMs){
+ checkDeadline(clock,started,deadlineMs);
+ const result=await operation();
+ checkDeadline(clock,started,deadlineMs);
+ return result;
+}
+
+export function createRetentionStorageAdapter(storage,clock,started,deadlineMs){
+ const bounded=boundedAdapter(storage,clock,started,deadlineMs,'invalid_storage_adapter');
+ return new Proxy(bounded,{get(target,property,receiver){
+  if(property==='remove')return (...args)=>withinDestructiveDeadline(()=>storage.remove(...args),clock,started,deadlineMs);
+  return Reflect.get(target,property,receiver);
  }});
 }
 
@@ -137,7 +154,11 @@ export async function runBackup(deps,options={}){
   const finished=await deps.db.finish(runId,{table_count:database.table_count,row_count:database.row_count,file_count:storage.file_count,database_bytes:database.bytes,storage_bytes:storage.bytes,checksum:manifest.integrity_checksum,duration_ms:durationMs,warnings:[],metadata:{manifest_path:manifestPath,source_git_checkpoint:deps.sourceGitCheckpoint,spec_checkpoint:deps.specCheckpoint}});
   if(finished!==true)fail('backup_finish_rejected');
   try{await deps.db.clear(runId);}catch{deps.logger?.error?.({event:'backup_staging_cleanup_failed',run_id:runId,backup_id:backupId});}
-  try{checkDeadline(clock,started,deadlineMs);await deps.retention?.({db:deps.db,storage:storageAdapter});}catch{deps.logger?.error?.({event:'backup_retention_failed',run_id:runId,backup_id:backupId});}
+  try{
+   checkDeadline(clock,started,deadlineMs);
+   const retention=await deps.retention?.({db:deps.db,storage:createRetentionStorageAdapter(deps.storage,clock,started,deadlineMs)});
+   if(retention?.warnings?.length)deps.logger?.error?.({event:'backup_retention_warning',run_id:runId,backup_id:backupId,warnings:retention.warnings});
+  }catch{deps.logger?.error?.({event:'backup_retention_failed',run_id:runId,backup_id:backupId});}
   deps.logger?.info?.({event:'backup_success',run_id:runId,backup_id:backupId,table_count:database.table_count,row_count:database.row_count,file_count:storage.file_count,total_bytes:database.bytes+storage.bytes,duration_ms:durationMs});
   return {status:'success',code:'backup_complete',run_id:runId,backup_id:backupId,table_count:database.table_count,row_count:database.row_count,file_count:storage.file_count,database_bytes:database.bytes,storage_bytes:storage.bytes,total_bytes:database.bytes+storage.bytes,duration_ms:durationMs,checksum:manifest.integrity_checksum};
  }catch(error){
@@ -156,30 +177,37 @@ export async function runRestoreDryRun(deps,backupId,options={}){
  const clock=deps.clock??Date.now;
  const started=clock();
  const deadlineMs=options.deadlineMs??DEFAULT_DEADLINE_MS;
+ const limits=options.limits??RESTORE_LIMITS;
  const db=boundedAdapter(deps.db,clock,started,deadlineMs,'invalid_database_adapter');
  const storage=boundedAdapter(deps.storage,clock,started,deadlineMs,'invalid_storage_adapter');
  const run=await db.findSuccessfulRun(backupId);
  if(!run)fail('backup_not_found');
  const manifestPath=`database/${backupId}/manifest.json`;
  const manifestBytes=await toBytes(await storage.download(BACKUP_BUCKET,manifestPath));
- if(manifestBytes.byteLength>RESTORE_LIMITS.manifestBytes)fail('manifest_too_large');
+ if(manifestBytes.byteLength>limits.manifestBytes)fail('manifest_too_large');
  const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(manifestBytes));
  await validateManifest(manifest,options.expectedTables);
  assertManifestRunBinding(manifest,run,manifestPath);
- assertRestoreBounds(manifest,options.limits??RESTORE_LIMITS);
+ assertRestoreBounds(manifest,limits);
  const databaseParts={};
  for(const table of manifest.database.tables)for(const part of table.parts)databaseParts[part.path]=await toBytes(await storage.download(BACKUP_BUCKET,part.path));
  const backupBlobs={};
  for(const entry of manifest.storage.objects)backupBlobs[entry.backup_blob_path]=await toBytes(await storage.download(BACKUP_BUCKET,entry.backup_blob_path));
  const liveSchema=await db.readLiveSchema();
  const targetRows={};
- let targetRowCount=0;
+ let targetRowCount=0;let targetBytes=0;
  for(const table of manifest.database.tables){
   const rows=[];let after=null;let previousAfter=null;
   for(;;){
    const page=await db.readTablePage(table.table_name,after,500);
    if(!Array.isArray(page))fail('invalid_restore_page');
-   for(const item of page){rows.push(JSON.parse(item.row_data));targetRowCount++;if(targetRowCount>RESTORE_LIMITS.rows)fail('restore_target_row_limit');}
+   for(const item of page){
+    if(typeof item?.row_data!=='string')fail('invalid_restore_page');
+    targetBytes+=byteLength(item.row_data);targetRowCount++;
+    if(targetRowCount>limits.rows)fail('restore_target_row_limit');
+    if(targetBytes>limits.targetBytes)fail('restore_target_byte_limit');
+    rows.push(JSON.parse(item.row_data));
+   }
    if(page.length<500)break;
    after=page.at(-1).primary_key;
    const fingerprint=stableStringify(after);
@@ -227,8 +255,9 @@ async function listBackupObjects(storage){
 }
 
 export async function runRetention(db,storage,now=new Date(),expectedTables){
- const acquired=await db.beginRetention();
- if(acquired!==true)return {skipped:true,reason:'maintenance_busy'};
+ const owner=await db.beginRetention();
+ if(owner===null||owner===undefined||owner===false)return {skipped:true,reason:'maintenance_busy'};
+ if(typeof owner!=='string'||!owner)fail('invalid_retention_lease');
  try{
   const runs=await db.listRuns();
   const objects=await listBackupObjects(storage);
@@ -240,7 +269,7 @@ export async function runRetention(db,storage,now=new Date(),expectedTables){
   for(const paths of [plan.snapshot_paths_to_delete,plan.blob_paths_to_delete])for(let index=0;index<paths.length;index+=100)unwrap(await storage.remove(BACKUP_BUCKET,paths.slice(index,index+100)));
   return plan;
  }finally{
-  if(await db.endRetention()!==true)fail('retention_lease_release_failed');
+  if(await db.endRetention(owner)!==true)fail('retention_lease_release_failed');
  }
 }
 
@@ -263,11 +292,11 @@ export function createSupabaseBackupDeps(client,config={}){
   readLiveSchema:()=>rpc('read_backup_live_schema',{}),
   async readConfig(){const data=await rpc('read_backup_config',{});return Array.isArray(data)?data[0]:data;},
   readTablePage:(table,after,limit)=>rpc('read_backup_table_page',{p_table_name:table,p_after:after,p_limit:limit}),
-  async listRuns(){const response=await client.from('backup_runs').select('id,backup_id,status,completed_at,checksum,metadata').order('completed_at',{ascending:false});return unwrap(response);},
-  async findSuccessfulRun(backupId){const response=await client.from('backup_runs').select('id,backup_id,status,checksum,metadata').eq('backup_id',backupId).eq('status','success').maybeSingle();return unwrap(response);},
+  async listRuns(){const response=await client.from('backup_runs').select('id,backup_id,backup_path,status,completed_at,checksum,metadata').order('completed_at',{ascending:false});return unwrap(response);},
+  async findSuccessfulRun(backupId){const response=await client.from('backup_runs').select('id,backup_id,backup_path,status,checksum,metadata').eq('backup_id',backupId).eq('status','success').maybeSingle();return unwrap(response);},
   recordRestoreDryRun:(runId,result)=>rpc('record_backup_restore_dry_run',{p_run_id:runId,p_result:result}),
   beginRetention:()=>rpc('begin_backup_retention',{}),
-  endRetention:()=>rpc('end_backup_retention',{}),
+  endRetention:owner=>rpc('end_backup_retention',{p_owner:owner}),
  };
  const deps={db,storage,sourceGitCheckpoint:config.sourceGitCheckpoint,specCheckpoint:config.specCheckpoint,projectRef:config.projectRef??'blaacuwwvyatfiyjnsrw',logger:config.logger??console};
  deps.retention=({db:runtimeDb=db,storage:runtimeStorage=storage}={})=>runRetention(runtimeDb,runtimeStorage,new Date());

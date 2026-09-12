@@ -6,6 +6,7 @@ import {runRetention} from '../supabase/functions/_shared/backup/orchestrator.mj
 
 const oldBlob='a'.repeat(64);
 const sharedBlob=`blobs/sha256/aa/${oldBlob}`;
+const leaseOwner='323e4567-e89b-42d3-a456-426614174000';
 
 function backupId(day,index){return `2026-08-${String(day).padStart(2,'0')}T020000Z_00000000-0000-4000-8000-${String(index).padStart(12,'0')}`;}
 
@@ -32,7 +33,7 @@ async function tenRuns(){
  for(let index=0;index<10;index++){
   const id=backupId(index+1,index+1);
   manifests[id]=await manifest(id,index===9?[sharedBlob]:[]);
-  runs.push({id:manifests[id].run_id,backup_id:id,status:'success',completed_at:`2026-08-${String(index+1).padStart(2,'0')}T02:00:00.000Z`,checksum:manifests[id].integrity_checksum,metadata:{manifest_path:`database/${id}/manifest.json`}});
+  runs.push({id:manifests[id].run_id,backup_id:id,backup_path:`database/${id}`,status:'success',completed_at:`2026-08-${String(index+1).padStart(2,'0')}T02:00:00.000Z`,checksum:manifests[id].integrity_checksum,metadata:{manifest_path:`database/${id}/manifest.json`}});
  }
  return {runs,manifests};
 }
@@ -42,7 +43,7 @@ test('retention keeps exactly ten successes and never deletes the newest',async(
  for(let index=0;index<12;index++){
   const id=backupId(index+1,index+1);
   manifests[id]=await manifest(id);
-  runs.push({id:manifests[id].run_id,backup_id:id,status:'success',completed_at:`2026-08-${String(index+1).padStart(2,'0')}T02:00:00.000Z`,checksum:manifests[id].integrity_checksum,metadata:{manifest_path:`database/${id}/manifest.json`}});
+  runs.push({id:manifests[id].run_id,backup_id:id,backup_path:`database/${id}`,status:'success',completed_at:`2026-08-${String(index+1).padStart(2,'0')}T02:00:00.000Z`,checksum:manifests[id].integrity_checksum,metadata:{manifest_path:`database/${id}/manifest.json`}});
   objects.push({path:`database/${id}/manifest.json`,created_at:'2026-08-01T00:00:00.000Z'});
  }
  runs.push({backup_id:backupId(20,99),status:'failed',completed_at:'2026-08-20T02:00:00.000Z'});
@@ -101,7 +102,7 @@ test('failed or incomplete snapshot objects wait seven days',async()=>{
 
 test('retention does no work without the database maintenance lease',async()=>{
  const events=[];
- const result=await runRetention({beginRetention:async()=>{events.push('begin');return false;}},{list:async()=>{events.push('list');return[];}},new Date(),[]);
+ const result=await runRetention({beginRetention:async()=>{events.push('begin');return null;}},{list:async()=>{events.push('list');return[];}},new Date(),[]);
  assert.deepEqual(result,{skipped:true,reason:'maintenance_busy'});
  assert.deepEqual(events,['begin']);
 });
@@ -109,21 +110,21 @@ test('retention does no work without the database maintenance lease',async()=>{
 test('retention always releases an acquired maintenance lease',async()=>{
  const events=[];
  const db={
-  beginRetention:async()=>{events.push('begin');return true;},
+  beginRetention:async()=>{events.push('begin');return leaseOwner;},
   listRuns:async()=>{events.push('runs');return[];},
-  endRetention:async()=>{events.push('end');return true;},
+  endRetention:async owner=>{events.push(`end:${owner}`);return true;},
  };
  const storage={list:async()=>{events.push('list');return[];},download:async()=>{throw new Error('unexpected_download');},remove:async()=>{events.push('remove');}};
  const result=await runRetention(db,storage,new Date('2026-09-11T00:00:00Z'),[]);
  assert.deepEqual(result.retained_backup_ids,[]);
- assert.deepEqual(events,['begin','runs','list','end']);
+ assert.deepEqual(events,['begin','runs','list',`end:${leaseOwner}`]);
 });
 
 test('retention fails closed on stalled backup-bucket pagination and releases its lease',async()=>{
  const events=[];
  const rows=Array.from({length:1000},(_,index)=>({name:`object-${index}`,id:`id-${index}`,metadata:{}}));
- const db={beginRetention:async()=>true,listRuns:async()=>[],endRetention:async()=>{events.push('end');return true;}};
+ const db={beginRetention:async()=>leaseOwner,listRuns:async()=>[],endRetention:async owner=>{events.push(`end:${owner}`);return true;}};
  const storage={list:async()=>rows,download:async()=>{throw new Error('unexpected_download');},remove:async()=>{events.push('remove');}};
  await assert.rejects(()=>runRetention(db,storage,new Date('2026-09-11T00:00:00Z'),[]),/storage_pagination_stalled/);
- assert.deepEqual(events,['end']);
+ assert.deepEqual(events,[`end:${leaseOwner}`]);
 });

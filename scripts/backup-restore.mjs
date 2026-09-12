@@ -2,6 +2,7 @@ import {pathToFileURL} from 'node:url';
 import {assertBackupId} from '../supabase/functions/_shared/backup/core.mjs';
 
 const FORBIDDEN_FLAGS=new Set(['--apply','--restore','--target-production','--allow-destructive']);
+const PRODUCTION_ORIGIN='https://blaacuwwvyatfiyjnsrw.supabase.co';
 const DATABASE_FIELDS=['insert','existing_identical','conflict','missing_dependency','total'];
 const STORAGE_FIELDS=['insert','existing_identical','conflict','total'];
 
@@ -19,7 +20,9 @@ export function buildRequest({backupId,url,secret}){
  if(typeof url!=='string'||typeof secret!=='string'||!url||!secret)fail('missing_backup_environment');
  let endpoint;
  try{endpoint=new URL('/functions/v1/backup-adma',url);}catch{fail('invalid_backup_url');}
- if(endpoint.protocol!=='https:')fail('invalid_backup_url');
+ let supplied;
+ try{supplied=new URL(url);}catch{fail('invalid_backup_url');}
+ if(supplied.origin!==PRODUCTION_ORIGIN||supplied.username||supplied.password||endpoint.origin!==PRODUCTION_ORIGIN)fail('invalid_backup_url');
  return {
   url:endpoint.href,
   init:{

@@ -76,7 +76,8 @@ export function assertBackupId(value){
 }
 
 export function assertManifestRunBinding(manifest,run,manifestPath){
- if(!run||manifest?.run_id!==run.id||manifest?.backup_id!==run.backup_id||manifest?.integrity_checksum!==run.checksum||run?.metadata?.manifest_path!==manifestPath)fail('manifest_run_mismatch');
+ const expectedBackupPath=`database/${manifest?.backup_id??''}`;
+ if(!run||manifest?.run_id!==run.id||manifest?.backup_id!==run.backup_id||manifest?.integrity_checksum!==run.checksum||run?.backup_path!==expectedBackupPath||run?.metadata?.manifest_path!==manifestPath)fail('manifest_run_mismatch');
  return true;
 }
 

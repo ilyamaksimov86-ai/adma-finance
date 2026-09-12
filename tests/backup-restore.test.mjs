@@ -158,13 +158,19 @@ test('backup v1 never creates a destructive restore plan',async()=>{
 test('restore CLI defaults to dry-run and exposes aggregate output only',()=>{
  const id=backupId;
  assert.deepEqual(parseArgs(['--backup-id',id]),{backupId:id});
- const request=buildRequest({backupId:id,url:'https://project.supabase.co',secret:'do-not-print'});
+ const request=buildRequest({backupId:id,url:'https://blaacuwwvyatfiyjnsrw.supabase.co',secret:'do-not-print'});
  assert.equal(JSON.parse(request.init.body).action,'restore_dry_run');
  assert.equal(JSON.parse(request.init.body).backup_id,id);
  const output=selectAggregateOutput({mode:'dry-run',backup_id:id,table_order:['projects'],database:{insert:1,existing_identical:2,conflict:0,missing_dependency:0,total:3,tables:{projects:{insert:1}}},storage:{insert:1,existing_identical:0,conflict:0,total:1},validated_parts:2,validated_blobs:1,manifest:{private:'row'},rows:[{secret:'x'}]});
  assert.deepEqual(Object.keys(output).sort(),['backup_id','database','mode','storage','table_order','validated_blobs','validated_parts']);
  assert.equal(JSON.stringify(output).includes('private'),false);
  assert.equal(JSON.stringify(output).includes('secret'),false);
+});
+
+test('restore CLI never sends its maintenance secret outside the production project',()=>{
+ for(const url of ['https://attacker.invalid','https://blaacuwwvyatfiyjnsrw.supabase.co.attacker.invalid','https://example.supabase.co']){
+  assert.throws(()=>buildRequest({backupId,url,secret:'do-not-print'}),/invalid_backup_url/);
+ }
 });
 
 test('restore CLI rejects every destructive flag before environment or network access',()=>{

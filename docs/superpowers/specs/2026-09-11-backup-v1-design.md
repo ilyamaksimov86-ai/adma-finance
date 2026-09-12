@@ -161,7 +161,7 @@ The lifecycle is:
 
 1. atomically claim a run;
 2. insert `backup_runs.status = 'running'`;
-3. prepare the repeatable-read database snapshot;
+3. prepare the single-statement MVCC database snapshot;
 4. upload and verify every database chunk;
 5. copy and verify every source Storage object;
 6. build the canonical manifest;
@@ -201,7 +201,7 @@ For snapshots beyond ten, the worker deletes their database part objects and man
 
 Failed/incomplete snapshot objects older than seven days may be removed, while their `backup_runs` metadata remains for diagnosis. Orphan blobs must be older than seven days and unreferenced by every validated retained manifest before deletion. This safety window also protects against an upload race.
 
-The maintenance lease removes the remaining content-addressed-blob race: a concurrent backup cannot begin between retention reference discovery and deletion. Every retained manifest must also match its `backup_runs` id, backup id, checksum, and recorded manifest path; any mismatch disables blob deletion.
+The maintenance lease removes the remaining content-addressed-blob race: a concurrent backup cannot begin between retention reference discovery and deletion. Destructive removal is awaited before releasing that lease, even when the operation exceeds the worker's internal deadline. Every retained manifest must also match its `backup_runs` id, backup id, backup path, checksum, and recorded manifest path; any mismatch disables blob deletion and emits a structured technical warning.
 
 At the audited size, ten database snapshots are expected to consume under 1 MB plus manifests. Existing source file blobs add about 0.24 MB. Even the conservative case where all current source bytes change on every retained snapshot remains only a few megabytes, far below the Free-plan 1 GB Storage quota. Actual measurements after the first backup replace these estimates in the rollout report.
 
@@ -226,7 +226,7 @@ Dry-run:
 11. stores and returns only aggregate technical results;
 12. performs no insert, update, delete, truncate, drop, upload, move, or remove operation.
 
-Validation is capped at a 10 MiB manifest, 128 MiB total backup bytes, 500,000 snapshot rows, 20,000 database parts, and 10,000 Storage objects. Database and Storage calls share a 135-second operation deadline, including hung requests. Live-table pagination is bounded by the row envelope and rejects a stalled cursor. These limits keep corrupted or unexpectedly large backups from exhausting the Edge worker; exceeding them is a fail-closed signal to design Backup V2 scaling rather than silently truncate V1.
+Validation is capped at a 2 MiB manifest, 16 MiB total backup bytes, 8 MiB of live target-row JSON, 50,000 snapshot rows, 4,096 database parts, and 2,000 Storage objects. Each database part is capped at 1 MiB and each Storage object at 8 MiB. Database and Storage calls share a 135-second operation deadline, including hung non-destructive requests. Validated raw part/blob buffers are released during classification. Live-table pagination is bounded by both row and byte envelopes and rejects a stalled cursor. These conservative working-set limits keep corrupted or unexpectedly large backups from exhausting the 256 MB Edge worker; exceeding them fails closed rather than truncating V1.
 
 Any `--apply`, `--restore`, `--target-production`, or `--allow-destructive` request is rejected as unsupported in Backup V1. This is stronger than an opt-in destructive mode and ensures the shipped tool cannot modify production business data.
 

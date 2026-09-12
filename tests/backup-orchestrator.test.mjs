@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {sha256Hex} from '../supabase/functions/_shared/backup/core.mjs';
-import {runBackup,runRestoreDryRun,assertManifestRunBinding,assertRestoreBounds} from '../supabase/functions/_shared/backup/orchestrator.mjs';
+import {runBackup,runRestoreDryRun,assertManifestRunBinding,assertRestoreBounds,runRetention,createRetentionStorageAdapter} from '../supabase/functions/_shared/backup/orchestrator.mjs';
 
 const uuid='123e4567-e89b-42d3-a456-426614174000';
 const runId='223e4567-e89b-42d3-a456-426614174000';
+const leaseOwner='323e4567-e89b-42d3-a456-426614174000';
 const backupId=`2026-09-11T120000Z_${uuid}`;
 
 async function fixture({claimResult='started',failAt=null,clock=()=>0}={}){
@@ -116,24 +117,58 @@ test('technical responses and logs never contain customer data',async()=>{
  assert.ok(result.message.length<=1000);
 });
 
+test('retention safety warnings are emitted as structured technical logs',async()=>{
+ const {deps,logs}=await fixture();
+ deps.retention=async()=>({warnings:['blob_cleanup_disabled_invalid_retained_manifest']});
+ const result=await runBackup(deps);
+ assert.equal(result.status,'success');
+ assert.deepEqual(logs.find(item=>item.event==='backup_retention_warning')?.warnings,['blob_cleanup_disabled_invalid_retained_manifest']);
+});
+
 test('restore manifest must match the successful run identity, checksum and path',()=>{
  const checksum='a'.repeat(64);
  const path='database/2026-09-11T120000Z_123e4567-e89b-42d3-a456-426614174000/manifest.json';
- const run={id:runId,backup_id:backupId,checksum,metadata:{manifest_path:path}};
+ const run={id:runId,backup_id:backupId,backup_path:`database/${backupId}`,checksum,metadata:{manifest_path:path}};
  const manifest={run_id:runId,backup_id:backupId,integrity_checksum:checksum};
  assert.equal(assertManifestRunBinding(manifest,run,path),true);
  assert.throws(()=>assertManifestRunBinding({...manifest,run_id:uuid},run,path),/manifest_run_mismatch/);
  assert.throws(()=>assertManifestRunBinding({...manifest,integrity_checksum:'b'.repeat(64)},run,path),/manifest_run_mismatch/);
  assert.throws(()=>assertManifestRunBinding(manifest,{...run,metadata:{manifest_path:'database/other/manifest.json'}},path),/manifest_run_mismatch/);
+ assert.throws(()=>assertManifestRunBinding(manifest,{...run,backup_path:'database/other'},path),/manifest_run_mismatch/);
 });
 
 test('restore rejects backups outside the bounded v1 validation envelope',()=>{
- const manifest={database:{row_count:1,bytes:1,tables:[{parts:[{}]}]},storage:{file_count:1,bytes:1,objects:[{}]},totals:{bytes:2}};
+ const manifest={database:{row_count:1,bytes:1,tables:[{parts:[{bytes:1}]}]},storage:{file_count:1,bytes:1,objects:[{source_size:1}]},totals:{bytes:2}};
  assert.equal(assertRestoreBounds(manifest),true);
- assert.throws(()=>assertRestoreBounds({...manifest,database:{...manifest.database,row_count:500001}}),/restore_row_limit/);
- assert.throws(()=>assertRestoreBounds({...manifest,database:{...manifest.database,tables:[{parts:Array(20001)}]}}),/restore_part_limit/);
- assert.throws(()=>assertRestoreBounds({...manifest,storage:{...manifest.storage,file_count:10001}}),/restore_object_limit/);
- assert.throws(()=>assertRestoreBounds({...manifest,totals:{bytes:128*1024*1024+1}}),/restore_byte_limit/);
+ assert.throws(()=>assertRestoreBounds({...manifest,database:{...manifest.database,row_count:50001}}),/restore_row_limit/);
+ assert.throws(()=>assertRestoreBounds({...manifest,database:{...manifest.database,tables:[{parts:Array.from({length:4097},()=>({bytes:1}))}]}}),/restore_part_limit/);
+ assert.throws(()=>assertRestoreBounds({...manifest,database:{...manifest.database,tables:[{parts:[{bytes:1024*1024+1}]}]}}),/restore_part_byte_limit/);
+ assert.throws(()=>assertRestoreBounds({...manifest,storage:{...manifest.storage,file_count:2001}}),/restore_object_limit/);
+ assert.throws(()=>assertRestoreBounds({...manifest,storage:{...manifest.storage,objects:[{source_size:8*1024*1024+1}]}}),/restore_object_byte_limit/);
+ assert.throws(()=>assertRestoreBounds({...manifest,totals:{bytes:16*1024*1024+1}}),/restore_byte_limit/);
+});
+
+test('retention deletion is never abandoned before its lease is released',async()=>{
+ let resolveRemove;
+ const removeGate=new Promise(resolve=>{resolveRemove=resolve;});
+ const events=[];
+ const storage=createRetentionStorageAdapter({
+  list:async(_bucket,options)=>{
+   if(options.prefix==='')return[{name:'database',id:null,metadata:null}];
+   if(options.prefix==='database')return[{name:run.backup_id,id:null,metadata:null}];
+   if(options.prefix===`database/${run.backup_id}`)return[{name:'incomplete.ndjson',id:'object-id',metadata:{},created_at:'2026-08-01T02:00:00.000Z'}];
+   return[];
+  },download:async()=>new Uint8Array(),
+  remove:async()=>{events.push('remove-start');await removeGate;events.push('remove-end');},
+ },Date.now,Date.now(),20);
+ const run={backup_id:'2026-08-01T020000Z_00000000-0000-4000-8000-000000000001',status:'failed',completed_at:'2026-08-01T02:00:00.000Z'};
+ const db={beginRetention:async()=>leaseOwner,listRuns:async()=>[run],endRetention:async owner=>{events.push(`lease-end:${owner}`);return true;}};
+ const pending=runRetention(db,storage,new Date('2026-09-11T00:00:00Z'),[]);
+ await new Promise(resolve=>setTimeout(resolve,40));
+ assert.deepEqual(events,['remove-start']);
+ resolveRemove();
+ await assert.rejects(()=>pending,/backup_deadline_exceeded/);
+ assert.deepEqual(events,['remove-start','remove-end',`lease-end:${leaseOwner}`]);
 });
 
 test('restore bounds a hung storage download with the internal deadline',async()=>{

@@ -54,22 +54,25 @@ test('claim and terminal RPCs enforce concurrency, age and safe failure',()=>{
  assert.match(sql,/left\([\s\S]*1000\)/);
  assert.match(sql,/where id = p_run_id[\s\S]*and status = 'running'/);
  assert.match(sql,/p_checksum is null[\s\S]*p_duration_ms is null/);
+ assert.match(sql,/p_table_count\s*<>\s*24/);
  assert.match(sql,/status <> 'success'[\s\S]*checksum is not null[\s\S]*duration_ms is not null/);
 });
 
 test('backup claims and retention share a fail-closed maintenance lease',()=>{
- assert.match(sql,/create table private\.backup_maintenance_state[\s\S]*retention_started_at timestamptz/);
+ assert.match(sql,/create table private\.backup_maintenance_state[\s\S]*retention_started_at timestamptz[\s\S]*retention_owner uuid/);
  assert.match(sql,/claim_backup_run[\s\S]*retention_started_at[\s\S]*maintenance_busy/);
- assert.match(sql,/create or replace function public\.begin_backup_retention\(\)[\s\S]*backup_runs[\s\S]*status = 'running'/);
- assert.match(sql,/create or replace function public\.end_backup_retention\(\)/);
- for(const fn of ['begin_backup_retention','end_backup_retention']){
-  assert.match(sql,new RegExp(`revoke all on function public\\.${fn}\\(\\)`));
-  assert.match(sql,new RegExp(`grant execute on function public\\.${fn}\\(\\) to service_role`));
- }
+ assert.match(sql,/create or replace function public\.begin_backup_retention\(\)[\s\S]*returns uuid[\s\S]*retention_owner/);
+ assert.match(sql,/create or replace function public\.end_backup_retention\(p_owner uuid\)[\s\S]*retention_owner = p_owner/);
+ assert.match(sql,/revoke all on function public\.begin_backup_retention\(\)/);
+ assert.match(sql,/grant execute on function public\.begin_backup_retention\(\) to service_role/);
+ assert.match(sql,/revoke all on function public\.end_backup_retention\(uuid\)/);
+ assert.match(sql,/grant execute on function public\.end_backup_retention\(uuid\) to service_role/);
 });
 
-test('snapshot RPC is repeatable-read, deterministic and lossless',()=>{
- assert.match(sql,/set default_transaction_isolation to 'repeatable read'/);
+test('snapshot RPC captures all business tables in one statement snapshot',()=>{
+ assert.match(sql,/create or replace function private\.read_backup_table_snapshot[\s\S]*language plpgsql[\s\S]*stable/i);
+ assert.match(sql,/insert into private\.backup_snapshot_chunks[\s\S]*cross join lateral private\.read_backup_table_snapshot/i);
+ assert.doesNotMatch(sql,/set default_transaction_isolation to 'repeatable read'/);
  assert.match(sql,/set timezone = 'UTC'/);
  assert.match(sql,/numeric[\s\S]*::text/i);
  assert.match(sql,/digest\([\s\S]*'sha256'/i);
@@ -78,8 +81,17 @@ test('snapshot RPC is repeatable-read, deterministic and lossless',()=>{
  assert.match(sql,/json_build_object/i);
  assert.match(sql,/'columns',[\s\S]*con\.conkey[\s\S]*'referenced_columns',[\s\S]*con\.confkey/i);
  assert.match(sql,/raise exception 'snapshot table set mismatch'/);
+ assert.match(sql,/array\[[\s\S]*'app_users'[\s\S]*'projects'[\s\S]*\]::text\[\]/);
  assert.match(sql,/format\([\s\S]*%I/);
  assert.match(sql,/set search_path = ''/);
+});
+
+test('secret-column guard covers explicit credential and signing key names',()=>{
+ const helper=sql.match(/create or replace function private\.read_backup_table_snapshot[\s\S]*?\n\$\$;/i)?.[0]??'';
+ for(const name of ['encryption_key','private_key','signing_key','jwt','session']){
+  assert.match(sql,new RegExp(name),`${name} must be guarded`);
+  assert.match(helper,new RegExp(name),`${name} must be guarded inside the statement-snapshot reader`);
+ }
 });
 
 test('snapshot readers are registry-bound and service-only',()=>{
@@ -107,5 +119,6 @@ test('backup bucket and daily vault-authenticated cron are private',()=>{
  assert.match(sql,/cron\.schedule\([\s\S]*'backup-adma-daily-check'[\s\S]*'43 2 \* \* \*'/);
  assert.match(sql,/X-Backup-Secret/);
  assert.match(sql,/timeout_milliseconds := 30000/);
+ assert.equal((sql.match(/url := 'https:\/\/blaacuwwvyatfiyjnsrw\.supabase\.co\/functions\/v1\/backup-adma'/g)??[]).length,1);
  assert.doesNotMatch(sql,/create policy[\s\S]*adma-backups/i);
 });

@@ -136,6 +136,7 @@ async function buildRestoreDryRunAsync(input){
    if(await sha256Hex(bytes)!==part.checksum)fail('database_part_checksum_mismatch');
    const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
    const partRows=text===''?[]:text.split('\n').map(line=>JSON.parse(line));
+   if(input.databaseParts instanceof Map)input.databaseParts.delete(part.path);else delete input.databaseParts?.[part.path];
    if(partRows.length!==part.row_count)fail('database_part_row_count_mismatch');
    for(const row of partRows){assertRowShape(row,table);rows.push(row);}
   }
@@ -150,6 +151,7 @@ async function buildRestoreDryRunAsync(input){
   const bytes=await bytesOf(raw);
   if(bytes.byteLength!==entry.source_size)fail('backup_blob_size_mismatch');
   if(await sha256Hex(bytes)!==entry.backup_checksum)fail('backup_blob_checksum_mismatch');
+  if(input.backupBlobs instanceof Map)input.backupBlobs.delete(entry.backup_blob_path);else delete input.backupBlobs?.[entry.backup_blob_path];
  }
 
  const targetRows=input.targetRows??{};
