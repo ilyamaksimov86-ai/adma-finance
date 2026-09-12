@@ -119,6 +119,10 @@ Deno.serve(async req=>{
     if(action==="update_project"){
       if(!privileged)return json({error:"forbidden"},403);const p=body.project||{};if(!p.id)return json({error:"id_required"},400);const parsed=projectInput(p,true);if(parsed.error)return json({error:parsed.error},400);const patch:any={...parsed.value,updated_at:new Date().toISOString()};const {data,error}=await db.from("projects").update(patch).eq("id",p.id).select("*").single();if(error)throw error;return json({ok:true,project:data});
     }
+    if(action==="delete_project"){
+      if(user.role!=="owner")return json({error:"forbidden"},403);const projectId=String(body?.project_id||"");if(!uuid.test(projectId))return json({error:"invalid_project_id"},400);if(typeof body?.confirmation!=="string")return json({error:"confirmation_required"},400);
+      const {data,error}=await db.rpc("hard_delete_project",{p_project_id:projectId,p_actor_id:user.id,p_confirmation:body.confirmation});if(error)throw error;const result=Array.isArray(data)?data[0]:data;return json({ok:true,project_id:String(result?.project_id||projectId),cleanup_queued:Number(result?.cleanup_queued||0)});
+    }
     if(action==="create_stage"){
       if(!privileged)return json({error:"forbidden"},403);const s=body.stage||{};const projectId=String(s.project_id||"");if(!projectId)return json({error:"project_id_required"},400);const parsed=stageInput(s);if(parsed.error)return json({error:parsed.error},400);const {data,error}=await db.from("project_stages").insert({...parsed.value,project_id:projectId,created_by:user.id}).select("*").single();if(error)throw error;return json({ok:true,stage:data});
     }

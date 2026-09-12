@@ -152,6 +152,31 @@ test('foreman cannot create or edit an object',async()=>{
  const update=await handler('adma-api',{},actor)(request({action:'update_project',project:{id:'project-1',name:'Запрещено'}}));
  assert.equal(create.status,403);assert.equal(update.status,403);
 });
+test('only an owner can hard delete a project through the transactional RPC',async()=>{
+ const projectId='11111111-1111-4111-8111-111111111111',rpcCalls=[];
+ const db={rpc:async(name,args)=>{rpcCalls.push({name,args});return{data:{project_id:projectId,cleanup_queued:4},error:null};}};
+ for(const role of ['partner','foreman']){
+  const denied=await handler('adma-api',db,{id:'22222222-2222-4222-8222-222222222222',role,is_active:true})(request({action:'delete_project',project_id:projectId,confirmation:'Тестовый объект'}));
+  assert.equal(denied.status,403);
+ }
+ assert.deepEqual(rpcCalls,[]);
+ const owner={id:'33333333-3333-4333-8333-333333333333',role:'owner',is_active:true};
+ const accepted=await handler('adma-api',db,owner)(request({action:'delete_project',project_id:projectId,confirmation:'Тестовый объект'}));
+ assert.equal(accepted.status,200);
+ assert.deepEqual(rpcCalls,[{name:'hard_delete_project',args:{p_project_id:projectId,p_actor_id:owner.id,p_confirmation:'Тестовый объект'}}]);
+ assert.deepEqual(await accepted.json(),{ok:true,project_id:projectId,cleanup_queued:4});
+});
+test('project hard delete validates input and reports an RPC rollback failure without success',async()=>{
+ let calls=0;const owner={id:'33333333-3333-4333-8333-333333333333',role:'owner',is_active:true};
+ const db={rpc:async()=>{calls++;return{data:null,error:Error('project_delete_failed')};}};
+ for(const body of [
+  {action:'delete_project',project_id:'not-a-uuid',confirmation:'Тестовый объект'},
+  {action:'delete_project',project_id:'11111111-1111-4111-8111-111111111111'},
+ ]) assert.equal((await handler('adma-api',db,owner)(request(body))).status,400);
+ assert.equal(calls,0);
+ const failed=await handler('adma-api',db,owner)(request({action:'delete_project',project_id:'11111111-1111-4111-8111-111111111111',confirmation:'Тестовый объект'}));
+ assert.equal(failed.status,500);assert.equal((await failed.json()).error,'project_delete_failed');assert.equal(calls,1);
+});
 test('project stage metadata is normalized and validated',()=>{
  const parse=stageParser();
  const valid=parse({name:'  Электрика  ',position:10,progress:65,status:'in_progress',planned_start:'2026-09-01',planned_end:'2026-09-20',work_cost:'180000'});

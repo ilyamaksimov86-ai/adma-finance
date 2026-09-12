@@ -36,6 +36,7 @@
         "update_user_access": { "request": ["user_id", "role", "is_active"], "response": ["ok", "user"] },
         "create_project": { "request": ["project"], "response": ["ok", "project"], "project_model": "Project" },
         "update_project": { "request": ["project.id", "project"], "response": ["ok", "project"], "project_model": "Project" },
+        "delete_project": { "request": ["project_id", "confirmation"], "response": ["ok", "project_id", "cleanup_queued"] },
         "create_stage": { "request": ["stage.project_id", "stage"], "response": ["ok", "stage"] },
         "update_stage": { "request": ["stage.id", "stage"], "response": ["ok", "stage"] },
         "delete_stage": { "request": ["id"], "response": ["ok"] },

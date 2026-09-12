@@ -59,6 +59,23 @@
       <div class="grid"><label>Дата начала<input id="pStartDate" type="date"></label><label>Плановая сдача<input id="pPlannedEndDate" type="date"></label></div>
       <div class="grid"><label>Фактическая сдача<input id="pActualEndDate" type="date"></label><label>Гарантия до<input id="pWarrantyUntil" type="date"></label></div>
       <label>Примечания<textarea id="pComment" rows="3" maxlength="2000"></textarea></label>
+      <section id="projectDeleteDangerZone" class="project-delete-danger" hidden>
+        <strong>Опасная зона</strong>
+        <p>Безвозвратно удалить объект и связанные с ним данные.</p>
+        <button id="projectDeleteDanger" type="button" class="btn danger full-button">Удалить объект</button>
+      </section>
+    </form>
+  </dialog>
+  <dialog id="projectDeleteDlg">
+    <form id="projectDeleteForm">
+      <div class="sheethead"><button id="cancelProjectDelete" type="button">Отмена</button><h2>Удалить объект</h2><button id="confirmProjectDelete" class="btn danger" disabled>Удалить</button></div>
+      <div class="project-delete-warning" role="alert">
+        <strong>Это действие нельзя отменить.</strong>
+        <p>Будут удалены этапы, финансы объекта, назначения мастеров, задачи, документы, фотографии и участники объекта.</p>
+        <p>Связанная заявка сохранится, но потеряет связь с объектом.</p>
+      </div>
+      <label>Для подтверждения введите точное название объекта: <strong id="projectDeleteExpectedName"></strong><input id="projectDeleteName" autocomplete="off" required></label>
+      <p id="projectDeleteError" class="danger-text" role="alert"></p>
     </form>
   </dialog>
   <dialog id="expenseDlg">

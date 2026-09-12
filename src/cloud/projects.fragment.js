@@ -166,6 +166,7 @@
     pStatus.value = 'preparation';
     const title = projectDlg.querySelector('.sheethead h2');
     if (title) title.textContent = 'Новый объект';
+    projectDeleteDangerZone.hidden = true;
     projectDlg.showModal();
   }
 
@@ -193,6 +194,7 @@
     pDesigner.value = p.designerId || '';
     const title = projectDlg.querySelector('.sheethead h2');
     if (title) title.textContent = 'Редактировать объект';
+    projectDeleteDangerZone.hidden = !canDeleteProjects();
     projectDlg.showModal();
   }
 
@@ -445,6 +447,7 @@
   }
 
   function installProjectHandlers() {
+    installProjectDeleteHandlers();
     projectForm.onsubmit = async ev => {
       ev.preventDefault();
       if (!cloudReady || !canManageProjects()) return;

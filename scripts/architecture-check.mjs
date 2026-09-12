@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 
 const sourceDir = new URL('../src/cloud/', import.meta.url);
-const expected = new Set(['shared.fragment.js','performance.fragment.js','platform.fragment.js','dashboard.fragment.js','projects.fragment.js','finance.fragment.js','masters.fragment.js','operations.fragment.js','designers.fragment.js','leads.fragment.js','knowledge.fragment.js']);
+const expected = new Set(['shared.fragment.js','performance.fragment.js','platform.fragment.js','dashboard.fragment.js','projects.fragment.js','project-delete.fragment.js','finance.fragment.js','masters.fragment.js','operations.fragment.js','designers.fragment.js','leads.fragment.js','knowledge.fragment.js']);
 const files = (await readdir(sourceDir)).filter(name => name.endsWith('.fragment.js'));
 const failures = [];
 const fail = message => failures.push(message);
