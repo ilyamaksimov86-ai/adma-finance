@@ -79,6 +79,25 @@ test('unchanged content reuses a verified content-addressed blob',async()=>{
  assert.equal(first.backup_checksum,first.source_checksum);
 });
 
+test('legacy StorageApiError statusCode 404 is treated as an absent backup blob',async()=>{
+ const adapter=storageFixture({'receipts/a.txt':'new'});
+ const download=adapter.download.bind(adapter);
+ adapter.download=async(bucket,path)=>{
+  try{return await download(bucket,path);}
+  catch(error){
+   if(bucket!=='adma-backups')throw error;
+   const missing=new Error('Object not found');
+   missing.name='StorageApiError';
+   missing.status=400;
+   missing.statusCode='404';
+   throw missing;
+  }
+ };
+ const object=(await listAllSourceObjects(adapter,'receipts'))[0];
+ const entry=await ensureBackupBlob(adapter,object,new Date('2026-09-11T12:00:00Z'));
+ assert.equal(adapter.files.has(`adma-backups/${entry.backup_blob_path}`),true);
+});
+
 test('changed source content creates a different hash path',async()=>{
  const adapter=storageFixture({'receipts/a.txt':'first'});
  const before=await ensureBackupBlob(adapter,(await listAllSourceObjects(adapter,'receipts'))[0],new Date());

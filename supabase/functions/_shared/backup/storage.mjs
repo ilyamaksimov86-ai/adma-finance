@@ -39,7 +39,7 @@ async function toBytes(value){
 }
 
 function isStatus(error,status){
- return Number(error?.status??error?.statusCode)===status||String(error?.code??'')===String(status);
+ return Number(error?.status)===status||Number(error?.statusCode)===status||String(error?.code??'')===String(status);
 }
 
 async function downloadBytes(adapter,bucket,path,maxBytes=MAX_OBJECT_BYTES){
