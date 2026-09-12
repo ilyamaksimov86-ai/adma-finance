@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {sha256Hex} from '../supabase/functions/_shared/backup/core.mjs';
-import {runBackup,runRestoreDryRun,assertManifestRunBinding,assertRestoreBounds,runRetention,createRetentionStorageAdapter} from '../supabase/functions/_shared/backup/orchestrator.mjs';
+import {runBackup,runRestoreDryRun,assertManifestRunBinding,assertRestoreBounds,runRetention,createRetentionStorageAdapter,readResponseBounded,listAllBackupRuns} from '../supabase/functions/_shared/backup/orchestrator.mjs';
 
 const uuid='123e4567-e89b-42d3-a456-426614174000';
 const runId='223e4567-e89b-42d3-a456-426614174000';
@@ -125,6 +125,16 @@ test('retention safety warnings are emitted as structured technical logs',async(
  assert.deepEqual(logs.find(item=>item.event==='backup_retention_warning')?.warnings,['blob_cleanup_disabled_invalid_retained_manifest']);
 });
 
+test('backup cannot publish a success outside the restore envelope',async()=>{
+ const {deps,events}=await fixture();
+ deps.backupStorage=async()=>[{source_bucket:'receipts',source_path:'large.bin',source_size:8*1024*1024+1,source_mime_type:null,source_updated_at:null,source_etag:null,source_checksum:'a'.repeat(64),backup_blob_path:`blobs/sha256/aa/${'a'.repeat(64)}`,backup_checksum:'a'.repeat(64),backed_up_at:'2026-09-11T12:00:00.000Z'}];
+ deps.validateStorageEntries=async()=>true;
+ const result=await runBackup(deps);
+ assert.equal(result.status,'failed');
+ assert.equal(result.code,'restore_object_byte_limit');
+ assert.equal(events.includes('mark-success'),false);
+});
+
 test('restore manifest must match the successful run identity, checksum and path',()=>{
  const checksum='a'.repeat(64);
  const path='database/2026-09-11T120000Z_123e4567-e89b-42d3-a456-426614174000/manifest.json';
@@ -175,9 +185,26 @@ test('restore bounds a hung storage download with the internal deadline',async()
  const deps={
   clock:Date.now,
   db:{findSuccessfulRun:async()=>({id:runId,backup_id:backupId,checksum:'a'.repeat(64),metadata:{manifest_path:`database/${backupId}/manifest.json`}})},
-  storage:{download:async()=>new Promise(()=>{})},
+  storage:{downloadBounded:async()=>new Promise(()=>{})},
  };
  const started=Date.now();
  await assert.rejects(()=>runRestoreDryRun(deps,backupId,{deadlineMs:20}),/backup_deadline_exceeded/);
  assert.ok(Date.now()-started<500);
+});
+
+test('bounded response download rejects advertised and streamed overflow before allocation',async()=>{
+ await assert.rejects(()=>readResponseBounded(new Response('12345',{headers:{'Content-Length':'5'}}),4),/restore_download_limit/);
+ const streamed=new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('123'));controller.enqueue(new TextEncoder().encode('456'));controller.close();}}));
+ await assert.rejects(()=>readResponseBounded(streamed,4),/restore_download_limit/);
+ assert.deepEqual(await readResponseBounded(new Response('1234'),4),new TextEncoder().encode('1234'));
+});
+
+test('backup run history is completely paginated with a stable order',async()=>{
+ const ranges=[];
+ const pages=[Array.from({length:1000},(_,index)=>({id:`first-${index}`,status:'failed'})),[{id:'older-success',status:'success'}]];
+ const client={from:()=>({select(){return this;},order(){return this;},range(from,to){ranges.push([from,to]);return Promise.resolve({data:pages.shift(),error:null});}})};
+ const rows=await listAllBackupRuns(client);
+ assert.equal(rows.length,1001);
+ assert.equal(rows.at(-1).id,'older-success');
+ assert.deepEqual(ranges,[[0,999],[1000,1999]]);
 });

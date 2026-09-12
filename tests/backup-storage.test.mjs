@@ -142,3 +142,13 @@ test('backup fails when source inventory changes while objects are copied',async
  };
  await assert.rejects(()=>backupStorage(adapter,new Date('2026-09-11T12:00:00.000Z')),/storage_inventory_changed/);
 });
+
+test('oversized source objects fail before any content download',async()=>{
+ let downloads=0;
+ const adapter={
+  list:async()=>[],
+  download:async()=>{downloads++;return new Uint8Array();},
+ };
+ await assert.rejects(()=>ensureBackupBlob(adapter,{bucket:'receipts',path:'large.bin',size:8*1024*1024+1}),/source_object_too_large/);
+ assert.equal(downloads,0);
+});

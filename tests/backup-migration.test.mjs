@@ -70,14 +70,15 @@ test('backup claims and retention share a fail-closed maintenance lease',()=>{
 });
 
 test('snapshot RPC captures all business tables in one statement snapshot',()=>{
+ assert.match(sql,/create or replace function private\.assert_backup_snapshot_contract\(\)[\s\S]*language plpgsql[\s\S]*stable/i);
  assert.match(sql,/create or replace function private\.read_backup_table_snapshot[\s\S]*language plpgsql[\s\S]*stable/i);
- assert.match(sql,/insert into private\.backup_snapshot_chunks[\s\S]*cross join lateral private\.read_backup_table_snapshot/i);
+ assert.match(sql,/insert into private\.backup_snapshot_chunks[\s\S]*private\.assert_backup_snapshot_contract\(\)[\s\S]*cross join lateral private\.read_backup_table_snapshot/i);
  assert.doesNotMatch(sql,/set default_transaction_isolation to 'repeatable read'/);
  assert.match(sql,/set timezone = 'UTC'/);
  assert.match(sql,/numeric[\s\S]*::text/i);
  assert.match(sql,/digest\([\s\S]*'sha256'/i);
  assert.match(sql,/order by[\s\S]*primary/i);
- assert.match(sql,/least\([\s\S]*500/i);
+ assert.match(sql,/\(rn-1\)\/500/);
  assert.match(sql,/json_build_object/i);
  assert.match(sql,/'columns',[\s\S]*con\.conkey[\s\S]*'referenced_columns',[\s\S]*con\.confkey/i);
  assert.match(sql,/raise exception 'snapshot table set mismatch'/);
@@ -105,7 +106,8 @@ test('snapshot readers are registry-bound and service-only',()=>{
   assert.match(sql,new RegExp(`grant execute on function public\\.${fn}\\(`),`${fn} must grant service role execution`);
  }
  assert.match(sql,/read_backup_table_page[\s\S]*backup_table_registry[\s\S]*included/i);
- assert.match(sql,/p_limit[\s\S]*between 1 and 500/i);
+ assert.match(sql,/p_limit[\s\S]*between 1 and 25/i);
+ assert.match(sql,/assert_backup_restore_row_size[\s\S]*262144/i);
  assert.match(sql,/read_backup_snapshot_chunks\(p_run_id uuid,p_offset integer default 0,p_limit integer default 100\)/);
  assert.match(sql,/p_limit not between 1 and 100/);
  assert.match(sql,/backup_config[\s\S]*source_git_checkpoint text[\s\S]*spec_checkpoint text/);

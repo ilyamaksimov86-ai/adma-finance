@@ -129,7 +129,7 @@ The wrapper requires `SUPABASE_URL` and `ADMA_BACKUP_SECRET` but never prints th
 
 Require manifest, part, blob, schema, and FK validation to pass. Review aggregate `insert`, `existing_identical`, `conflict`, and `missing_dependency` counts. Backup V1 cannot apply the plan.
 
-Restore validation is intentionally bounded to a 2 MiB manifest, 16 MiB total snapshot, 8 MiB of live target-row JSON, 50,000 database rows, 4,096 database parts, and 2,000 Storage objects. Each database part is capped at 1 MiB and each Storage object at 8 MiB. Raw validated part/blob buffers are released during classification, and all calls share the same 135-second internal deadline as backup execution. Exceeding any limit fails closed and requires a reviewed scaling change; the dry-run never continues with a truncated set.
+Restore validation is intentionally bounded to a 2 MiB manifest, 16 MiB total snapshot, 8 MiB of cumulative live target data, 50,000 database rows, 4,096 database parts, and 2,000 Storage objects. Each database part is capped at 1 MiB, each Storage object at 8 MiB, each live row at 256 KiB, and each live page at 25 rows. Downloads are streamed from signed URLs pinned to this exact project origin and are cancelled on actual-byte overflow or deadline. Successful backups must fit the same envelope. Raw validated part/blob buffers are released during classification. Exceeding any limit fails closed and requires a reviewed scaling change; the dry-run never continues with a truncated set.
 
 ## Retention and capacity
 

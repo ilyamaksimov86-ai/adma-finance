@@ -103,7 +103,7 @@ Only the service role can use the schema. The Edge Function accesses it through 
 
 ## Consistent database snapshot
 
-The Edge Function calls one volatile snapshot-preparation RPC. PostgREST executes the RPC in one transaction, and the function sets `default_transaction_isolation` to `repeatable read`. All application tables therefore observe one consistent PostgreSQL snapshot while chunks are generated.
+The Edge Function calls one snapshot-preparation RPC. That RPC performs every application-table read through a `STABLE` private lateral reader inside one `INSERT … SELECT` statement. PostgreSQL therefore gives all 24 reads the same statement-level MVCC snapshot even though PostgREST opens the surrounding RPC transaction at its normal isolation level. The exact registry/public-schema/secret-column contract is asserted inside that same statement snapshot.
 
 The RPC:
 
@@ -226,7 +226,7 @@ Dry-run:
 11. stores and returns only aggregate technical results;
 12. performs no insert, update, delete, truncate, drop, upload, move, or remove operation.
 
-Validation is capped at a 2 MiB manifest, 16 MiB total backup bytes, 8 MiB of live target-row JSON, 50,000 snapshot rows, 4,096 database parts, and 2,000 Storage objects. Each database part is capped at 1 MiB and each Storage object at 8 MiB. Database and Storage calls share a 135-second operation deadline, including hung non-destructive requests. Validated raw part/blob buffers are released during classification. Live-table pagination is bounded by both row and byte envelopes and rejects a stalled cursor. These conservative working-set limits keep corrupted or unexpectedly large backups from exhausting the 256 MB Edge worker; exceeding them fails closed rather than truncating V1.
+Validation is capped at a 2 MiB manifest, 16 MiB total backup bytes, 8 MiB of cumulative live target data, 50,000 snapshot rows, 4,096 database parts, and 2,000 Storage objects. Each database part is capped at 1 MiB, each Storage object at 8 MiB, each live row at 256 KiB, and live pages at 25 rows. Bounded downloads use signed URLs pinned to the exact project origin, stream response chunks, cancel as soon as the actual-byte limit is exceeded, and carry an abort deadline. Successful backup finalization enforces this same restore envelope. Validated raw part/blob buffers are released during classification. Live-table pagination is bounded by both row and byte envelopes and rejects a stalled cursor. These conservative working-set limits keep corrupted or unexpectedly large backups from exhausting the 256 MB Edge worker; exceeding them fails closed rather than truncating V1.
 
 Any `--apply`, `--restore`, `--target-production`, or `--allow-destructive` request is rejected as unsupported in Backup V1. This is stronger than an opt-in destructive mode and ensures the shipped tool cannot modify production business data.
 

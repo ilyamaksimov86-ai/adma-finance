@@ -324,6 +324,70 @@ begin
 end;
 $$;
 
+create or replace function private.assert_backup_snapshot_contract()
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_approved_tables constant text[] := array[
+    'app_users','company_expenses','designer_interactions','designers','expenses',
+    'finance_act_costs','finance_act_payments','finance_acts',
+    'finance_waybill_payments','finance_waybills','knowledge_attachments',
+    'knowledge_issues','knowledge_tech_cards','knowledge_tech_checklist_items',
+    'lead_interactions','leads','master_assignments','masters','project_documents',
+    'project_members','project_photos','project_stages','project_tasks','projects'
+  ]::text[];
+begin
+  if exists (
+    (select unnest(v_approved_tables)
+     except select b.table_name from private.backup_table_registry b where b.included)
+    union all
+    (select b.table_name from private.backup_table_registry b where b.included
+     except select unnest(v_approved_tables))
+  ) then
+    raise exception 'approved backup table set mismatch';
+  end if;
+
+  if exists (
+    select 1
+      from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+      left join private.backup_table_registry b on b.table_name = c.relname
+     where n.nspname = 'public' and c.relkind in ('r','p') and b.table_name is null
+  ) then
+    raise exception 'unclassified public tables';
+  end if;
+
+  if exists (
+    select 1 from private.backup_table_registry b
+     where not exists (
+       select 1 from pg_catalog.pg_class c
+       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = b.table_name and c.relkind in ('r','p')
+     )
+  ) then
+    raise exception 'classified public table missing';
+  end if;
+
+  if exists (
+    select 1
+      from private.backup_table_registry b
+      join pg_catalog.pg_class c on c.relname = b.table_name
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+      join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+     where b.included
+       and not (a.attname = any(b.excluded_columns))
+       and a.attname ~* '(^|_)(password(_hash)?|token|secret|api_key|service_key|credential|encryption_key|private_key|signing_key|jwt(_secret|_key)?|session(_id|_key|_token)?|refresh_token|access_token)($|_)'
+  ) then
+    raise exception 'secret-like unclassified columns';
+  end if;
+  return true;
+end;
+$$;
+
 create or replace function private.read_backup_table_snapshot(
   p_table_name text,
   p_excluded_columns text[]
@@ -547,10 +611,22 @@ begin
      chunk_index,row_count,body,bytes,checksum)
   select p_run_id,s.table_name,s.columns,s.numeric_columns,s.primary_key,s.foreign_keys,
          s.chunk_index,s.row_count,s.body,s.bytes,s.checksum
-    from private.backup_table_registry b
+    from (select private.assert_backup_snapshot_contract() as valid) contract
+    cross join private.backup_table_registry b
     cross join lateral private.read_backup_table_snapshot(b.table_name,b.excluded_columns) s
-   where b.included
+   where contract.valid and b.included
    order by s.table_name,s.chunk_index;
+
+  if exists (
+    select 1 from private.backup_snapshot_chunks
+     where run_id = p_run_id and bytes > 1048576
+  ) then
+    raise exception 'snapshot_chunk_too_large';
+  end if;
+
+  if (select coalesce(sum(bytes),0) from private.backup_snapshot_chunks where run_id = p_run_id) > 16777216 then
+    raise exception 'snapshot_too_large';
+  end if;
 
   insert into private.backup_snapshot_tables
     (run_id,table_name,columns,numeric_columns,primary_key,foreign_keys,
@@ -766,10 +842,25 @@ begin
 end;
 $$;
 
+create or replace function private.assert_backup_restore_row_size(p_row text)
+returns text
+language plpgsql
+immutable
+security definer
+set search_path = ''
+as $$
+begin
+  if pg_catalog.octet_length(p_row) > 262144 then
+    raise exception 'restore_target_row_too_large' using errcode = '54000';
+  end if;
+  return p_row;
+end;
+$$;
+
 create or replace function public.read_backup_table_page(
   p_table_name text,
   p_after jsonb default null,
-  p_limit integer default 500
+  p_limit integer default 25
 )
 returns table(row_data text,primary_key jsonb)
 language plpgsql
@@ -787,7 +878,7 @@ declare
   v_where text := '';
   v_sql text;
 begin
-  if p_limit not between 1 and 500 then
+  if p_limit not between 1 and 25 then
     raise exception 'invalid_page_limit' using errcode = '22023';
   end if;
 
@@ -839,10 +930,10 @@ begin
   end if;
 
   v_sql := format(
-    'select json_build_object(%s)::text,jsonb_build_object(%s) from public.%I %s order by %s limit $2',
+    'select private.assert_backup_restore_row_size(json_build_object(%s)::text),jsonb_build_object(%s) from public.%I %s order by %s limit $2',
     v_json_args,v_pk_args,r.table_name,v_where,v_primary_order
   );
-  return query execute v_sql using p_after,least(p_limit,500);
+  return query execute v_sql using p_after,least(p_limit,25);
 end;
 $$;
 
@@ -896,8 +987,12 @@ begin
 end
 $$;
 
+revoke all on function private.assert_backup_snapshot_contract() from public, anon, authenticated;
+grant execute on function private.assert_backup_snapshot_contract() to service_role;
 revoke all on function private.read_backup_table_snapshot(text,text[]) from public, anon, authenticated;
 grant execute on function private.read_backup_table_snapshot(text,text[]) to service_role;
+revoke all on function private.assert_backup_restore_row_size(text) from public, anon, authenticated;
+grant execute on function private.assert_backup_restore_row_size(text) to service_role;
 revoke all on function public.claim_backup_run(text,boolean) from public, anon, authenticated;
 grant execute on function public.claim_backup_run(text,boolean) to service_role;
 revoke all on function public.begin_backup_retention() from public, anon, authenticated;

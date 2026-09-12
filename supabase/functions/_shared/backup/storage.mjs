@@ -2,6 +2,7 @@ import {BACKUP_SOURCE_BUCKETS,sha256Hex} from './core.mjs';
 
 const BACKUP_BUCKET='adma-backups';
 const PAGE_SIZE=1000;
+const MAX_OBJECT_BYTES=8*1024*1024;
 const SOURCE_BUCKETS=new Set(BACKUP_SOURCE_BUCKETS);
 
 function fail(code){throw new Error(code);}
@@ -41,8 +42,17 @@ function isStatus(error,status){
  return Number(error?.status??error?.statusCode)===status||String(error?.code??'')===String(status);
 }
 
-async function downloadOptional(adapter,bucket,path){
- try{return await toBytes(await adapter.download(bucket,path));}
+async function downloadBytes(adapter,bucket,path,maxBytes=MAX_OBJECT_BYTES){
+ const value=typeof adapter.downloadBounded==='function'
+  ?await adapter.downloadBounded(bucket,path,maxBytes)
+  :await adapter.download(bucket,path);
+ const bytes=await toBytes(value);
+ if(bytes.byteLength>maxBytes)fail('storage_object_too_large');
+ return bytes;
+}
+
+async function downloadOptional(adapter,bucket,path,maxBytes=MAX_OBJECT_BYTES){
+ try{return await downloadBytes(adapter,bucket,path,maxBytes);}
  catch(error){if(isStatus(error,404)||error?.code==='not_found')return null;throw error;}
 }
 
@@ -105,7 +115,9 @@ async function verifyBlob(adapter,path,expectedHash,missingCode='backup_blob_mis
 export async function ensureBackupBlob(adapter,object,now=new Date()){
  assertSourceBucket(object?.bucket);
  assertRelativePath(object?.path);
- const sourceBytes=await toBytes(await adapter.download(object.bucket,object.path));
+ if(!Number.isSafeInteger(object?.size)||object.size<0)fail('source_size_unavailable');
+ if(object.size>MAX_OBJECT_BYTES)fail('source_object_too_large');
+ const sourceBytes=await downloadBytes(adapter,object.bucket,object.path,MAX_OBJECT_BYTES);
  if(object.size!==null&&object.size!==undefined&&object.size!==sourceBytes.byteLength)fail('source_size_mismatch');
  const checksum=await sha256Hex(sourceBytes);
  const blobPath=`blobs/sha256/${checksum.slice(0,2)}/${checksum}`;
