@@ -145,13 +145,21 @@ async function buildRestoreDryRunAsync(input){
   snapshotRows[table.table_name]=rows;
  }
 
+ const entriesByBlob=new Map();
  for(const entry of manifest.storage.objects){
-  const raw=mapValue(input.backupBlobs,entry.backup_blob_path);
+  const entries=entriesByBlob.get(entry.backup_blob_path)??[];
+  entries.push(entry);entriesByBlob.set(entry.backup_blob_path,entries);
+ }
+ for(const [path,entries] of entriesByBlob){
+  const raw=mapValue(input.backupBlobs,path);
   if(raw===undefined||raw===null)fail('missing_backup_blob');
   const bytes=await bytesOf(raw);
-  if(bytes.byteLength!==entry.source_size)fail('backup_blob_size_mismatch');
-  if(await sha256Hex(bytes)!==entry.backup_checksum)fail('backup_blob_checksum_mismatch');
-  if(input.backupBlobs instanceof Map)input.backupBlobs.delete(entry.backup_blob_path);else delete input.backupBlobs?.[entry.backup_blob_path];
+  const checksum=await sha256Hex(bytes);
+  for(const entry of entries){
+   if(bytes.byteLength!==entry.source_size)fail('backup_blob_size_mismatch');
+   if(checksum!==entry.backup_checksum)fail('backup_blob_checksum_mismatch');
+  }
+  if(input.backupBlobs instanceof Map)input.backupBlobs.delete(path);else delete input.backupBlobs?.[path];
  }
 
  const targetRows=input.targetRows??{};

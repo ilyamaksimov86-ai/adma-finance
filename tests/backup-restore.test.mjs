@@ -122,6 +122,20 @@ test('dry run rejects missing or corrupt backup blobs',async()=>{
  await assert.rejects(()=>buildRestoreDryRun(corrupt),/backup_blob_(size|checksum)_mismatch/);
 });
 
+test('dry run validates one deduplicated blob referenced by multiple source objects',async()=>{
+ const input=await fixture();
+ const shared={...input.manifest.storage.objects[0],source_path:'r/copy.txt'};
+ input.manifest.storage.objects.push(shared);
+ input.manifest.storage.file_count=2;
+ input.manifest.storage.bytes+=shared.source_size;
+ input.manifest.totals.bytes+=shared.source_size;
+ delete input.manifest.integrity_checksum;
+ input.manifest=await sealManifest(input.manifest);
+ const result=await buildRestoreDryRun(input);
+ assert.equal(result.validated_blobs,2);
+ assert.equal(result.storage.insert,2);
+});
+
 test('storage classification distinguishes insert, identical and conflict',async()=>{
  const input=await fixture();
  const entry=input.manifest.storage.objects[0];

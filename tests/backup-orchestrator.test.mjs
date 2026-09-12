@@ -199,12 +199,18 @@ test('bounded response download rejects advertised and streamed overflow before 
  assert.deepEqual(await readResponseBounded(new Response('1234'),4),new TextEncoder().encode('1234'));
 });
 
-test('backup run history is completely paginated with a stable order',async()=>{
- const ranges=[];
- const pages=[Array.from({length:1000},(_,index)=>({id:`first-${index}`,status:'failed'})),[{id:'older-success',status:'success'}]];
- const client={from:()=>({select(){return this;},order(){return this;},range(from,to){ranges.push([from,to]);return Promise.resolve({data:pages.shift(),error:null});}})};
+test('backup run history follows the exact count across server-capped pages',async()=>{
+ const ranges=[];let selectOptions;
+ const all=[...Array.from({length:4},(_,index)=>({id:`failed-${index}`,status:'failed'})),{id:'older-success',status:'success'}];
+ const client={from:()=>({select(_columns,options){selectOptions=options;return this;},order(){return this;},range(from,to){ranges.push([from,to]);return Promise.resolve({data:all.slice(from,Math.min(to+1,from+2)),error:null,count:all.length});}})};
  const rows=await listAllBackupRuns(client);
- assert.equal(rows.length,1001);
+ assert.equal(rows.length,5);
  assert.equal(rows.at(-1).id,'older-success');
- assert.deepEqual(ranges,[[0,999],[1000,1999]]);
+ assert.deepEqual(selectOptions,{count:'exact'});
+ assert.deepEqual(ranges,[[0,999],[2,1001],[4,1003]]);
+});
+
+test('backup run history fails closed without a stable exact count',async()=>{
+ const client={from:()=>({select(){return this;},order(){return this;},range(){return Promise.resolve({data:[],error:null,count:null});}})};
+ await assert.rejects(()=>listAllBackupRuns(client),/backup_run_count_required/);
 });

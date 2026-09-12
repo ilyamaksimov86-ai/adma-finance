@@ -337,18 +337,24 @@ export async function runRetention(db,storage,now=new Date(),expectedTables){
 
 export async function listAllBackupRuns(client,{pageSize=1000,maxPages=20}={}){
  if(!Number.isSafeInteger(pageSize)||pageSize<1||pageSize>1000||!Number.isSafeInteger(maxPages)||maxPages<1)fail('invalid_run_page_limit');
- const result=[];
+ const result=[];let expectedCount=null;
  for(let page=0;page<maxPages;page++){
-  const from=page*pageSize;
+  const from=result.length;
   const response=await client.from('backup_runs')
-   .select('id,backup_id,backup_path,status,completed_at,checksum,metadata')
+   .select('id,backup_id,backup_path,status,completed_at,checksum,metadata',{count:'exact'})
    .order('completed_at',{ascending:false,nullsFirst:false})
    .order('id',{ascending:false})
    .range(from,from+pageSize-1);
   const rows=unwrap(response);
   if(!Array.isArray(rows))fail('invalid_backup_run_page');
+  const count=response?.count;
+  if(!Number.isSafeInteger(count)||count<0)fail('backup_run_count_required');
+  if(expectedCount===null)expectedCount=count;
+  else if(count!==expectedCount)fail('backup_run_count_changed');
+  if(result.length+rows.length>expectedCount)fail('invalid_backup_run_page');
   result.push(...rows);
-  if(rows.length<pageSize)return result;
+  if(result.length===expectedCount)return result;
+  if(!rows.length)fail('incomplete_backup_run_history');
  }
  fail('backup_run_pagination_limit');
 }
