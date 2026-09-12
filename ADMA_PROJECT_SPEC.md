@@ -234,6 +234,7 @@ API payloads и форматы ошибок должны быть стабиль
 | Нативное iOS/Android приложение | deferred | Будущий отдельный клиент к существующему backend/API |
 | Push-уведомления | deferred | Реализовывать только при отдельной задаче |
 | Background cleanup orphan-файлов | included | Приватная очередь, Vault-authenticated hourly worker и backoff |
+| Automatic Backup V1 | included | Ежедневный логический backup БД и incremental Storage, retention 10, restore dry-run |
 | Shared API contracts для web/mobile | included | Проверяемый контракт основных command/file API; изменения additive |
 | Глобальная фотогалерея | removed | В первой версии не нужна |
 | Сложный Gantt / resource planning | removed | Не требуется без отдельного этапа |
@@ -243,7 +244,24 @@ API payloads и форматы ошибок должны быть стабиль
 
 При завершении крупного этапа обновлять только соответствующие строки ledger, не переписывая весь spec.
 
-## 22. Roadmap оставшихся этапов
+## 22. Automatic Backup V1
+
+Backup V1 работает внутри существующего Supabase project и не меняет бизнес-схему или production-поведение приложения.
+
+- База данных: один согласованный logical snapshot в пределах одного MVCC statement для 24 application tables; данные пишутся порциями с контрольными суммами.
+- Storage: incremental content-addressed backup приватных buckets `receipts`, `finance-documents`, `project-files` и `knowledge-files`; bucket `exports` намеренно исключён. Неизменившиеся файлы повторно используют существующие blobs.
+- Backup хранится в приватном bucket `adma-backups`; доступ и helper RPC разрешены только `service_role`. Состояние, метрики и результат проверки записываются в закрытую RLS-таблицу `backup_runs`.
+- Edge Function `backup-adma` запускается Vault-аутентифицированной ежедневной cron-проверкой в 02:43 UTC. Новый backup пропускается, если последний успешный backup моложе 72 часов.
+- Retention: сохраняются 10 последних успешных snapshots; незавершённые артефакты неуспешных запусков доступны для диагностики 7 дней. Удаление общих blobs выполняется только когда на них больше не ссылается ни один сохраняемый manifest.
+- Restore V1 — только validation/dry-run: проверяет manifest, checksums, количество строк и файлов, порядок внешних ключей, совместимость live schema и классифицирует записи как insert / existing identical / conflict / missing dependency. Restore не изменяет бизнес-таблицы и Storage.
+
+Первый подтверждённый production backup: `2026-09-12T081814Z_0ee23871-d1bd-4280-8e1c-1f3950f25bd2`, завершён `2026-09-12T08:18:26.928533Z` со статусом success. Снимок содержит 24 таблицы / 111 строк и 2 файла; logical DB — 78 473 bytes, Storage — 242 782 bytes, всего — 321 255 bytes. Manifest записан последним и имеет checksum. Restore dry-run подтвердил 24 части БД, 111/111 идентичных существующих строк, 2/2 идентичных файла и 0 conflicts.
+
+Развёрнуты `backup-adma` v2 и защищённый от удаления `adma-backups` worker `storage-cleanup` v2. При текущем объёме оценка steady-state для 10 snapshots составляет около 1,42 MiB при неизменных файлах и около 3,50–4,15 MiB в консервативном сценарии, когда все source-файлы меняются каждый цикл. Это операционная оценка, которая должна пересчитываться при росте данных.
+
+Backup V1 НЕ защищает от полной потери Supabase project/account, потому что backup хранится внутри того же Supabase project.
+
+## 23. Roadmap оставшихся этапов
 
 Текущий порядок разработки фиксируется так:
 

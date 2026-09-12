@@ -28,6 +28,14 @@ Deno.serve(async request => {
   let completed = 0;
   let failed = 0;
   for (const job of jobs || []) {
+    if (job.bucket === 'adma-backups') {
+      await db.from('storage_cleanup_queue')
+        .update({completed_at:new Date().toISOString(),last_error:'protected_bucket'})
+        .eq('id',job.id)
+        .is('completed_at',null);
+      failed += 1;
+      continue;
+    }
     const {error:removeError} = await db.storage.from(job.bucket).remove([job.object_path]);
     if (!removeError) {
       const {error:updateError} = await db.from('storage_cleanup_queue').update({completed_at:new Date().toISOString(),last_error:null}).eq('id',job.id).is('completed_at',null);

@@ -1,6 +1,7 @@
 const safeError = error => String(error?.message || error || 'storage_remove_failed').slice(0, 1000);
 
 export async function removeStorageObject(db, bucket, objectPath) {
+  if (bucket === 'adma-backups') throw new Error('protected_bucket');
   if (!objectPath) return false;
   const path = String(objectPath);
   const { error } = await db.storage.from(bucket).remove([path]);
