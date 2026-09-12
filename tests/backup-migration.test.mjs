@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {existsSync,readFileSync} from 'node:fs';
 
 const sql=readFileSync(new URL('../supabase/migrations/20260911123020_add_backup_v1.sql',import.meta.url),'utf8');
+const liveSchemaFixUrl=new URL('../supabase/migrations/20260912082000_fix_backup_live_schema_types.sql',import.meta.url);
+const liveSchemaFixSql=existsSync(liveSchemaFixUrl)?readFileSync(liveSchemaFixUrl,'utf8'):'';
 
 const includedTables=[
  'app_users','company_expenses','designer_interactions','designers','expenses',
@@ -123,4 +125,11 @@ test('backup bucket and daily vault-authenticated cron are private',()=>{
  assert.match(sql,/timeout_milliseconds := 30000/);
  assert.equal((sql.match(/url := 'https:\/\/blaacuwwvyatfiyjnsrw\.supabase\.co\/functions\/v1\/backup-adma'/g)??[]).length,1);
  assert.doesNotMatch(sql,/create policy[\s\S]*adma-backups/i);
+});
+
+test('live schema reader returns catalog names as its declared text arrays',()=>{
+ assert.match(liveSchemaFixSql,/array_agg\(a\.attname::text order by a\.attnum\)/i);
+ assert.match(liveSchemaFixSql,/array_agg\(a\.attname::text order by k\.ordinality\)/i);
+ assert.match(liveSchemaFixSql,/revoke all on function public\.read_backup_live_schema\(\) from public, anon, authenticated/i);
+ assert.match(liveSchemaFixSql,/grant execute on function public\.read_backup_live_schema\(\) to service_role/i);
 });
